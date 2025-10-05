@@ -1,0 +1,14 @@
+- Reviewed existing repository structure and requirements.
+- Designed a lightweight Plotly-based approach for rendering ordered travel paths from CSV data.
+- Implemented `journey_mapper.py` to parse the CSV, build map segments, style the globe, and export an interactive HTML journey map.
+- Added sample journey data at `data/example_journey.csv` plus Python dependencies in `requirements.txt`.
+- Rewrote `README.md` with setup instructions, CSV format details, styling notes, and an end-to-end example command.
+- Compiled the script with `python -m compileall journey_mapper.py` to verify syntax.
+- Expanded Quick start instructions in `README.md` to include explicit virtual environment creation guidance that accounts for multiple local environments.
+- Extended `journey_mapper.py` with satellite Mapbox rendering, adaptive camera paths, and MP4 export support for journeys with closely spaced stops.
+- Updated `requirements.txt` to include kaleido and imageio dependencies required for video export.
+- Documented the satellite/video workflow in `README.md`, including Mapbox token handling, ffmpeg requirements, and new CLI flags.
+- Added a dedicated "Providing a Mapbox token" section to `README.md` with step-by-step guidance for supplying the token via environment variable or CLI flag.
+- Fixed a Plotly 5.x compatibility issue by removing unsupported marker outlines in the satellite layer and reran the CLI, noting that HTML generation succeeds while video export now correctly prompts for installing `kaleido`.
+- Added a satellite-video fallback so Mapbox tile fetch failures gracefully switch to the styled globe, and documented the behavior.
+- Introduced a `--video-map-style` flag so users can skip satellite rendering during export (preventing the Kaleido warnings in offline environments) and updated the docs accordingly.

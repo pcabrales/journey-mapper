@@ -1,0 +1,5 @@
+pandas>=2.0
+plotly>=5.15
+kaleido>=0.2.1
+imageio>=2.31
+imageio-ffmpeg>=0.4
