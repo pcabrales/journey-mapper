@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,6 +179,10 @@ def parse_args() -> argparse.Namespace:
         default="progressive",
         choices=["full", "progressive"],
         help="Draw the full route at once or progressively build it between stops.",
+    )
+    parser.add_argument(
+        "--save-frames-dir",
+        help="Optional directory to export individual video frames for inspection.",
     )
     return parser.parse_args()
 
@@ -597,18 +602,20 @@ def render_styled_geo(
         )
 
     fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor="center", font=dict(size=30, color="#edf2f4")),
         showlegend=False,
         width=width,
         height=height,
+        autosize=False,
+        font=dict(family="DejaVu Sans, Arial, sans-serif"),
         paper_bgcolor="#0b132b",
-        margin=dict(l=10, r=10, t=60, b=10),
+        margin=dict(l=0, r=0, t=0, b=0),
         geo=dict(
             projection=dict(
                 type=projection,
                 rotation=rotation or dict(lat=avg_lat, lon=avg_lon),
                 scale=scale or 0.95,
             ),
+            domain=dict(x=[0, 1], y=[0, 1]),
             showland=True,
             landcolor="#1d3557",
             showcountries=True,
@@ -621,6 +628,22 @@ def render_styled_geo(
             bgcolor="#0b132b",
         ),
     )
+
+    # Title inside the map as an overlay annotation
+    if title:
+        fig.add_annotation(
+            x=0.5,
+            y=0.98,
+            xref="paper",
+            yref="paper",
+            xanchor="center",
+            yanchor="top",
+            text=title,
+            showarrow=False,
+            font=dict(size=26, color="#edf2f4"),
+            bgcolor="rgba(11,19,43,0.55)",
+            borderpad=6,
+        )
 
     # Progressive frames: one per stop, route grows cumulatively
     if progressive_route and len(df) > 1:
@@ -655,7 +678,7 @@ def render_styled_geo(
                 dict(
                     type="buttons",
                     showactive=False,
-                    y=1.08,
+                    y=0.96,
                     x=0.5,
                     xanchor="center",
                     buttons=[
@@ -674,7 +697,7 @@ def render_styled_geo(
             ],
             sliders=[
                 dict(
-                    y=0.02,
+                    y=0.06,
                     x=0.1,
                     len=0.8,
                     pad={"b": 10, "t": 50},
@@ -787,21 +810,39 @@ def render_satellite_map(
         )
 
     fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor="center", font=dict(size=30, color="#f7f9fb")),
         showlegend=False,
         width=width,
         height=height,
-        margin=dict(l=10, r=10, t=60, b=10),
+        autosize=False,
+        font=dict(family="DejaVu Sans, Arial, sans-serif"),
+        margin=dict(l=0, r=0, t=0, b=0),
         paper_bgcolor="#000814",
         mapbox=dict(
             accesstoken=token,
             style=mapbox_style,
+            domain=dict(x=[0, 1], y=[0, 1]),
             center=dict(lat=center_lat, lon=center_lon),
             zoom=zoom if zoom is not None else 1.4,
             bearing=bearing,
             pitch=pitch,
         ),
     )
+
+    # Title inside the map as an overlay annotation
+    if title:
+        fig.add_annotation(
+            x=0.5,
+            y=0.98,
+            xref="paper",
+            yref="paper",
+            xanchor="center",
+            yanchor="top",
+            text=title,
+            showarrow=False,
+            font=dict(size=26, color="#f7f9fb"),
+            bgcolor="rgba(0,8,20,0.55)",
+            borderpad=6,
+        )
 
     # Progressive frames: one per stop, route grows cumulatively
     if progressive_route and len(df) > 1:
@@ -835,7 +876,7 @@ def render_satellite_map(
                 dict(
                     type="buttons",
                     showactive=False,
-                    y=1.08,
+                    y=0.96,
                     x=0.5,
                     xanchor="center",
                     buttons=[
@@ -854,7 +895,7 @@ def render_satellite_map(
             ],
             sliders=[
                 dict(
-                    y=0.02,
+                    y=0.06,
                     x=0.1,
                     len=0.8,
                     pad={"b": 10, "t": 50},
@@ -880,11 +921,63 @@ def ensure_kaleido_available() -> None:
 def figure_to_image(fig: go.Figure, *, img_format: str = "png", width: int, height: int) -> bytes:
     try:
         # Plotly/kaleido supports png, jpeg, webp, svg (we use raster formats)
-        return fig.to_image(format=img_format, width=width, height=height)
+        # Use scale=1 explicitly to avoid devicePixelRatio variance across renders.
+        return fig.to_image(format=img_format, width=width, height=height, scale=1, engine="kaleido")
     except Exception as exc:  # pragma: no cover - depends on local kaleido runtime
-        if "Mapbox error" in str(exc):
-            raise MapboxTileUnavailable("Mapbox tiles unavailable for static rendering.") from exc
+        msg = sanitize_error_message(str(exc))
+        if "mapbox" in msg.lower():
+            raise MapboxTileUnavailable(f"Mapbox static rendering failed: {msg}") from exc
         raise
+
+
+def sanitize_error_message(msg: str) -> str:
+    """Best-effort redaction of sensitive tokens from error messages.
+
+    - Redacts URL params like access_token=...
+    - Redacts token-like substrings starting with pk./sk.
+    """
+    try:
+        # access_token=... query params
+        msg = re.sub(r"(access_token=)([^&\s\"]+)", r"\1***redacted***", msg, flags=re.IGNORECASE)
+        # pk./sk. token substrings
+        msg = re.sub(r"\b(pk\.|sk\.)[A-Za-z0-9\._-]+", r"\1***redacted***", msg)
+        return msg
+    except Exception:
+        return msg
+
+
+def preflight_mapbox_snapshot(*, token: str, mapbox_style: str, frame_format: str) -> Optional[str]:
+    """Attempt a tiny Mapbox snapshot to verify static tile access.
+
+    Returns None on success; otherwise returns a sanitized diagnostic string.
+    """
+    try:
+        ensure_kaleido_available()
+        # Minimal empty dataset centered at (0,0) is fine; we only need Mapbox layout to render.
+        empty_df = pd.DataFrame({col: [] for col in ["city", "country", "latitude", "longitude"]})
+        fig = render_satellite_map(
+            empty_df,
+            title="",
+            width=320,
+            height=200,
+            token=token or "",
+            center=(0.0, 0.0),
+            zoom=1.4,
+            bearing=0.0,
+            pitch=0.0,
+            mapbox_style=mapbox_style,
+            progressive_route=False,
+        )
+        # Try producing a small raster image
+        _ = figure_to_image(fig, img_format=frame_format or "png", width=320, height=200)
+        return None
+    except MapboxTileUnavailable as exc:
+        return sanitize_error_message(str(exc))
+    except RuntimeError as exc:
+        # Likely Kaleido missing or similar runtime issue
+        return sanitize_error_message(str(exc))
+    except Exception as exc:  # pragma: no cover - environment-specific
+        return sanitize_error_message(str(exc))
 
 
 def write_video(
@@ -964,14 +1057,53 @@ def write_video(
             rendered.append(iio.imread(image_bytes, extension=ext))
         return rendered
 
+    # Preflight: if attempting Mapbox-based video, verify static tile access first
+    mode_to_render = preferred_mode
+    if preferred_mode == "mapbox":
+        diag = preflight_mapbox_snapshot(token=token or "", mapbox_style=args.mapbox_style, frame_format=args.frame_format)
+        if diag:
+            print("❌ Mapbox preflight check failed; falling back to the styled globe for video.")
+            # Provide a brief sanitized diagnostic to help the user fix their setup
+            # Common cases: Invalid token (401), Forbidden/referrer (403), offline/DNS errors
+            print(f"   Details: {diag}")
+            if token and not (str(token).startswith("pk.") or str(token).startswith("sk.")):
+                print("   Hint: The token does not look like a Mapbox token (expected to start with 'pk.' or 'sk.').")
+            low = diag.lower()
+            if ("401" in low) or ("unauthorized" in low) or ("invalid token" in low):
+                print("   Hint: Token is invalid or lacks scope for the requested style.")
+            elif ("403" in low) or ("forbidden" in low) or ("whitelist" in low) or ("referrer" in low):
+                print("   Hint: Token restrictions may block headless rendering. Use a Public token without URL referrer limits.")
+            elif ("enotfound" in low) or ("name resolution" in low) or ("err_name_not_resolved" in low):
+                print("   Hint: DNS/network issue. If behind a proxy, set HTTPS_PROXY/HTTP_PROXY so Kaleido can reach api.mapbox.com.")
+            elif ("econn" in low) or ("err_connection" in low) or ("timed out" in low) or ("timeout" in low):
+                print("   Hint: Connection blocked or timed out. Check firewall/VPN/proxy and allow api.mapbox.com.")
+            mode_to_render = "styled"
+
     try:
-        rendered_frames = render_mode_frames(preferred_mode)
-    except MapboxTileUnavailable:
-        if preferred_mode == "mapbox":
+        rendered_frames = render_mode_frames(mode_to_render)
+    except MapboxTileUnavailable as exc:
+        if mode_to_render == "mapbox":
             print("⚠️  Mapbox tiles unavailable during video capture; falling back to the styled globe for MP4 output.")
+            try:
+                print(f"   Details: {sanitize_error_message(str(exc))}")
+            except Exception:
+                pass
             rendered_frames = render_mode_frames("styled")
         else:
             raise
+
+    if args.save_frames_dir:
+        frame_dir = Path(args.save_frames_dir)
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from PIL import Image  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depends on optional deps
+            raise RuntimeError(
+                "Saving frames requires Pillow. Install it with 'pip install Pillow'."
+            ) from exc
+        for idx, frame in enumerate(rendered_frames):
+            img = Image.fromarray(frame, mode="RGB")
+            img.save(frame_dir / f"{preferred_mode}_frame_{idx:05d}.png")
 
     # Choose container/codec and align output extension
     chosen_fmt = (args.video_format or "mp4").lower()
@@ -988,18 +1120,26 @@ def write_video(
 
     try:
         if chosen_fmt in codec_by_fmt:
-            iio.imwrite(
-                output_path,
-                rendered_frames,
+            write_kwargs = dict(
                 fps=args.fps,
                 codec=codec_by_fmt[chosen_fmt],
                 bitrate=args.bitrate,
+                macro_block_size=1,
             )
+            try:
+                iio.imwrite(output_path, rendered_frames, **write_kwargs)
+            except TypeError:
+                # Older backends may not support some kwargs; retry with minimal set
+                write_kwargs.pop("macro_block_size", None)
+                iio.imwrite(output_path, rendered_frames, **write_kwargs)
         elif chosen_fmt == "gif":
             iio.imwrite(
                 output_path,
                 rendered_frames,
                 fps=args.fps,
+                subrectangles=False,
+                loop=0,
+                disposal=2,
             )
         else:  # Fallback to mp4 if unknown
             iio.imwrite(

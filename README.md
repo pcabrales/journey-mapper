@@ -1,6 +1,6 @@
 # journey-mapper
 
-Turn a list of stops into a globe-spanning journey visual. 
+Turn a list of stops into      a globe-spanning journey visual. 
 
 ![](./builds/global_journey.gif)
 
@@ -17,18 +17,18 @@ Feed the app a CSV that names each stop, its country, and its coordinates, and i
    ```bash
    pip install -r requirements.txt
    ```
-3. (Optional) Provide a Mapbox token if you want the satellite basemap or a video flyover with real imagery (see "Providing a Mapbox token"):
+3. (Optional) Provide a Mapbox token if you want the satellite basemap (see "Providing a Mapbox token"):
    ```bash
    export MAPBOX_TOKEN="pk.your_token_here"
    ```
 4. Generate a journey map:
    ```bash
-   python journey_mapper.py data/example_journey.csv --output builds/example_journey.html --title "Around the World in 10 Stops"
+   python journey_mapper.py data/example_journey.csv --output builds/global_journey.html --title "Global Journey"
    ```
 5. Open the resulting HTML file in your browser.
 6. (Optional) Capture a video flyover between stops:
    ```bash
-   python journey_mapper.py data/example_journey.csv --map-style satellite --video builds/example_journey.mp4 --title "Around the World in 10 Stops"
+   python journey_mapper.py data/example_journey.csv --map-style satellite --video builds/global_journey.mp4 --title "Global Journey"
    ```
    Video export uses ffmpeg under the hood; install it or add `imageio-ffmpeg` to your environment if you see codec errors.
 
@@ -74,19 +74,10 @@ An example dataset lives at `data/example_journey.csv`.
 
 - Pass `--video path/to/file.mp4` to export an MP4 where the camera glides from one stop to the next.
 - The camera automatically adjusts its zoom: long-haul hops stay wide, while nearby stops get close-up sweeps so you can see the detail.
-- Use `--fps` to control playback smoothness and `--linger` (seconds) to decide how long the camera pauses at each destination.
-- Pick the recording basemap with `--video-map-style`: `auto` (default), `styled`, or `satellite`. This lets you force the styled globe to avoid Mapbox warnings in network-restricted environments.
-- Video rendering requires Kaleido (for Plotly image export) and ImageIO with ffmpeg support. The provided `requirements.txt` includes both `kaleido` and `imageio-ffmpeg`.
-- If Mapbox tiles are unreachable while recording (e.g., offline rendering), the script automatically falls back to the styled globe for video frames so the export still succeeds.
+- Use `--linger` (seconds) to decide how long the camera pauses at each destination.
 
 If no satellite token is available, the video still renders using the stylized globe, orbiting and zooming appropriately between nearby locations.
 
-## Styling choices
-
-- Projection defaults to an orthographic globe centered on the journey when the styled map is in use.
-- Numbered, color-rich markers make the travel order obvious.
-- Hover the markers to see extra context pulled from optional columns.
-- For the satellite view, the route is rendered with neon lines and warm markers to pop against real imagery.
 
 You can switch to a different projection with `--projection natural earth` (other supported options: `equirectangular`, `mercator`). Width and height may also be tuned with `--width` and `--height`.
 
@@ -95,14 +86,13 @@ You can switch to a different projection with `--projection natural earth` (othe
 The bundled example produces this kind of visualization:
 
 ```bash
-python journey_mapper.py data/example_journey.csv --output builds/example_journey.html
+python journey_mapper.py data/example_journey.csv --output builds/global_journey.html
 ```
 
-Add `--video builds/example_journey.mp4 --map-style satellite` to also generate a camera flyover. Open the HTML map in your browser and play the MP4 to explore the journey from two complementary angles.
+Add `--video builds/global_journey.mp4` to also generate a camera flyover. Open the HTML map in your browser and play the MP4 to explore the journey from two complementary angles.
+
+- Hover the markers to see extra context pulled from optional columns.
 
 ## Troubleshooting
-
-- If you see an error about missing modules, ensure `pandas`, `plotly`, `kaleido`, and `imageio` are installed (reinstall with `pip install -r requirements.txt`).
 - For non-Latin characters, save your CSV with UTF-8 encoding.
 - Coordinates must be decimal degrees; the script raises an error if it cannot parse them.
-- Codec complaints when exporting video usually mean ffmpeg is not available. Installing `imageio-ffmpeg` (already listed in `requirements.txt`) or system ffmpeg solves it.
