@@ -4,3 +4,9 @@ __pycache__
 *.pyc
 .DS_Store
 .vscode
+data/*
+!data/example_journey.csv
+!data/repo-cover.png
+TODO.md
+LOG.md
+

@@ -1,6 +1,10 @@
 # journey-mapper
 
-Turn a list of stops into a globe-spanning journey visual. Feed the app a CSV that names each stop, its country, and its coordinates, and it will paint a connected route with numbered markers on a richly styled world map—or an optional satellite basemap—then export an interactive HTML map and an optional camera-tour video.
+Turn a list of stops into a globe-spanning journey visual. 
+
+![](./data/global_journey.gif)
+
+Feed the app a CSV that names each stop, its country, and its coordinates, and it will paint a connected route with numbered markers on a world map then export an interactive HTML map and an optional camera-tour video.
 
 ## Quick start
 
