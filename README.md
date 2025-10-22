@@ -2,7 +2,7 @@
 
 Turn a list of stops into a globe-spanning journey visual. 
 
-![](./data/global_journey.gif)
+![](./builds/global_journey.gif)
 
 Feed the app a CSV that names each stop, its country, and its coordinates, and it will paint a connected route with numbered markers on a world map then export an interactive HTML map and an optional camera-tour video.
 
