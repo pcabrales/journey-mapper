@@ -1,6 +1,6 @@
 # journey-mapper
 
-Turn a list of stops into      a globe-spanning journey visual. 
+Turn a list of stops into a globe-spanning journey. (Made this repo to have a visualization of trips made with my friends and family over the years.)
 
 ![](./builds/global_journey.gif)
 
