@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
+from skimage.metrics import structural_similarity as ssim
 import math
 import re
 import os
@@ -12,6 +14,9 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 REQUIRED_COLUMNS = {"city", "country", "latitude", "longitude"}
 OPTIONAL_COLUMNS = ["date", "notes", "description"]
@@ -998,43 +1003,15 @@ def write_video(
     output_path = Path(args.video)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if args.save_frames_dir:
+        os.makedirs(args.save_frames_dir, exist_ok=True)
+    
     def render_mode_frames(mode: str) -> List:
-        if mode == "mapbox":
-            frame_defs = create_mapbox_camera_frames(df, args.fps, args.linger, args.zoom_boost)
-            if not frame_defs:
-                raise RuntimeError("Cannot build video: the CSV has no locations.")
-            rendered: List = []
-            for frame in frame_defs:
-                p_lat, p_lon = build_partial_path_segments(df, frame.seg_index, frame.seg_t)
-                fig = render_satellite_map(
-                    df,
-                    title=args.title,
-                    width=args.width,
-                    height=args.height,
-                    token=token or "",
-                    center=(frame.lat, frame.lon),
-                    zoom=frame.zoom,
-                    bearing=frame.bearing,
-                    pitch=frame.pitch,
-                    mapbox_style=args.mapbox_style,
-                    label_distance_km=args.label_distance_km,
-                    marker_size=max(12, int(args.marker_size * 0.9)),
-                    label_font_size=max(10, int(args.label_font_size * 0.9)),
-                    path_lat_override=p_lat,
-                    path_lon_override=p_lon,
-                    label_offset_km=args.label_offset_km,
-                    reached_upto=(0 if frame.seg_index < 0 else frame.seg_index + (1 if frame.seg_t >= 1.0 else 0)),
-                )
-                image_bytes = figure_to_image(fig, img_format=args.frame_format, width=args.width, height=args.height)
-                ext = ".jpg" if args.frame_format == "jpeg" else f".{args.frame_format}"
-                rendered.append(iio.imread(image_bytes, extension=ext))
-            return rendered
-
         frame_defs = create_globe_frames(df, args.fps, args.linger, args.zoom_boost)
         if not frame_defs:
             raise RuntimeError("Cannot build video: the CSV has no locations.")
         rendered: List = []
-        for frame in frame_defs:
+        for frame_num, frame in enumerate(frame_defs):
             p_lat, p_lon = build_partial_path_segments(df, frame.seg_index, frame.seg_t)
             fig = render_styled_geo(
                 df,
@@ -1054,7 +1031,30 @@ def write_video(
             )
             image_bytes = figure_to_image(fig, img_format=args.frame_format, width=args.width, height=args.height)
             ext = ".jpg" if args.frame_format == "jpeg" else f".{args.frame_format}"
-            rendered.append(iio.imread(image_bytes, extension=ext))
+            rendered_frame = iio.imread(image_bytes, extension=ext)
+            print(f"Rendered frame {frame_num}:")
+            if frame_num >= 1:
+                # rendered_grayscale = np.dot(rendered_frame[..., :3], [0.2989, 0.5870, 0.1140])
+                # rendered_prev_grayscale = np.dot(rendered[-1][..., :3], [0.2989, 0.5870, 0.1140]
+                rendered_grayscale = rendered_frame.copy()
+                rendered_prev_grayscale = rendered[-1]
+                
+                # save as images
+                if args.save_frames_dir:
+                    iio.imwrite(os.path.join(args.save_frames_dir, f"frame_{frame_num}.jpg"), rendered_grayscale, extension=ext)
+
+                # difference = np.abs(rendered_grayscale - rendered_prev_grayscale) / (1e-6 + rendered_prev_grayscale.max())
+                # rel_difference = difference.mean() * 100   
+                
+                # ssim_value = (1 - ssim(rendered_grayscale, rendered_prev_grayscale, data_range=rendered_prev_grayscale.max() - rendered_prev_grayscale.min()))
+                # print(ssim_value) 
+                
+                percentage_diff_pixels = (rendered_grayscale != rendered_prev_grayscale).sum() / rendered_grayscale.size * 100
+                # print(f"Percentage of different pixels from previous frame: {percentage_diff_pixels} %")
+                if  percentage_diff_pixels > 33.:  
+                    print("Significant difference detected")
+                    continue
+            rendered.append(rendered_frame)
         return rendered
 
     # Preflight: if attempting Mapbox-based video, verify static tile access first
@@ -1092,18 +1092,18 @@ def write_video(
         else:
             raise
 
-    if args.save_frames_dir:
-        frame_dir = Path(args.save_frames_dir)
-        frame_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            from PIL import Image  # type: ignore
-        except ImportError as exc:  # pragma: no cover - depends on optional deps
-            raise RuntimeError(
-                "Saving frames requires Pillow. Install it with 'pip install Pillow'."
-            ) from exc
-        for idx, frame in enumerate(rendered_frames):
-            img = Image.fromarray(frame, mode="RGB")
-            img.save(frame_dir / f"{preferred_mode}_frame_{idx:05d}.png")
+    # if args.save_frames_dir:
+    #     frame_dir = Path(args.save_frames_dir)
+    #     frame_dir.mkdir(parents=True, exist_ok=True)
+    #     try:
+    #         from PIL import Image  # type: ignore
+    #     except ImportError as exc:  # pragma: no cover - depends on optional deps
+    #         raise RuntimeError(
+    #             "Saving frames requires Pillow. Install it with 'pip install Pillow'."
+    #         ) from exc
+    #     for idx, frame in enumerate(rendered_frames):
+    #         img = Image.fromarray(frame, mode="RGB")
+    #         img.save(frame_dir / f"{preferred_mode}_frame_{idx:05d}.png")
 
     # Choose container/codec and align output extension
     chosen_fmt = (args.video_format or "mp4").lower()
@@ -1210,12 +1210,10 @@ def main() -> None:
             if not token_available:
                 print("⚠️  Satellite video requested but no Mapbox token found; using styled globe instead.")
                 preferred_mode = "styled"
-            else:
-                preferred_mode = "mapbox"
         elif video_preference == "styled":
             preferred_mode = "styled"
         else:  # auto
-            preferred_mode = "mapbox" if token_available else "styled"
+            preferred_mode = "styled"
 
         write_video(
             df,

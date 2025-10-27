@@ -4,3 +4,4 @@ kaleido>=0.2.1
 imageio>=2.31
 imageio-ffmpeg>=0.4
 Pillow>=9.0
+scikit-image>=0.19

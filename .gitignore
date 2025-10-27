@@ -9,4 +9,8 @@ data/*
 !data/repo-cover.png
 TODO.md
 LOG.md
+journey_map.html
+builds/*
+!builds/global_journey.html
+!builds/global_journey.gif
 
