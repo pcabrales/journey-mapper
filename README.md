@@ -17,39 +17,18 @@ Feed the app a CSV that names each stop, its country, and its coordinates, and i
    ```bash
    pip install -r requirements.txt
    ```
-3. (Optional) Provide a Mapbox token if you want the satellite basemap (see "Providing a Mapbox token"):
-   ```bash
-   export MAPBOX_TOKEN="pk.your_token_here"
-   ```
-4. Generate a journey map:
+3. Generate a journey map:
    ```bash
    python journey_mapper.py data/example_journey.csv --output builds/global_journey.html --title "Global Journey"
    ```
-5. Open the resulting HTML file in your browser.
-6. (Optional) Capture a video flyover between stops:
+4. Open the resulting HTML file in your browser.
+5. (Optional) Capture a video flyover between stops:
    ```bash
-   python journey_mapper.py data/example_journey.csv --map-style satellite --video builds/global_journey.mp4 --title "Global Journey"
+   python journey_mapper.py data/example_journey.csv --video builds/global_journey.mp4 --title "Global Journey"
    ```
    Video export uses ffmpeg under the hood; install it or add `imageio-ffmpeg` to your environment if you see codec errors.
 
 If you prefer reusing an existing environment, activate it first and make sure it is isolated from other projects before installing the requirements.
-
-## Providing a Mapbox token
-
-1. Create a free Mapbox account at https://account.mapbox.com/ if you do not already have one.
-2. In your Mapbox dashboard, copy an access token (the default public token works for this project).
-3. Supply that token to the app in one of two ways:
-   - **Environment variable (ideal for repeated runs):**
-     ```bash
-     export MAPBOX_TOKEN="pk.your_token_here"
-     python journey_mapper.py data/example_journey.csv --map-style satellite --output builds/example_satellite.html
-     ```
-   - **Command-line flag (handy for ad-hoc runs or multiple tokens):**
-     ```bash
-     python journey_mapper.py data/example_journey.csv --map-style satellite --mapbox-token "pk.your_token_here" --output builds/example_satellite.html
-     ```
-
-If no token is provided, the script automatically falls back to the stylized globe view so you can still generate the HTML and video outputs.
 
 ## CSV format
 
@@ -64,20 +43,11 @@ Optional columns enrich the tooltip (include any combination of `date`, `notes`,
 
 An example dataset lives at `data/example_journey.csv`.
 
-## Satellite basemap (optional)
-
-- Set `--map-style satellite` and supply a Mapbox access token (either via `--mapbox-token` or the `MAPBOX_TOKEN` environment variable).
-- Without a token the script gracefully falls back to the stylized globe.
-- Map markers stay numbered and hover cards keep the optional metadata even on the satellite view.
-
 ## Video tour (optional)
 
 - Pass `--video path/to/file.mp4` to export an MP4 where the camera glides from one stop to the next.
 - The camera automatically adjusts its zoom: long-haul hops stay wide, while nearby stops get close-up sweeps so you can see the detail.
 - Use `--linger` (seconds) to decide how long the camera pauses at each destination.
-
-If no satellite token is available, the video still renders using the stylized globe, orbiting and zooming appropriately between nearby locations.
-
 
 You can switch to a different projection with `--projection natural earth` (other supported options: `equirectangular`, `mercator`). Width and height may also be tuned with `--width` and `--height`.
 

@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import numpy as np
-from skimage.metrics import structural_similarity as ssim
 import math
-import re
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -24,27 +21,12 @@ EARTH_RADIUS_KM = 6371.0
 
 
 @dataclass
-class CameraFrame:
-    lat: float
-    lon: float
-    zoom: float
-    bearing: float
-    pitch: float = 45.0
-    seg_index: int = -1
-    seg_t: float = 0.0
-
-
-@dataclass
 class GlobeFrame:
     lat: float
     lon: float
     scale: float
     seg_index: int = -1
     seg_t: float = 0.0
-
-
-class MapboxTileUnavailable(RuntimeError):
-    """Raised when static satellite rendering fails due to unavailable Mapbox tiles."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,7 +60,7 @@ def parse_args() -> argparse.Namespace:
             "equirectangular",
             "mercator",
         ],
-        help="Projection used when the styled (non-satellite) map is active.",
+        help="Projection used for the styled globe view.",
     )
     parser.add_argument(
         "--label-distance-km",
@@ -117,22 +99,6 @@ def parse_args() -> argparse.Namespace:
         help="Height of the figure in pixels.",
     )
     parser.add_argument(
-        "--map-style",
-        default="styled",
-        choices=["styled", "satellite"],
-        help="Choose between the original styled globe or a satellite basemap (requires Mapbox token).",
-    )
-    parser.add_argument(
-        "--mapbox-style",
-        default="satellite",
-        choices=["satellite", "satellite-streets", "outdoors", "light", "dark"],
-        help="Mapbox style for satellite mode.",
-    )
-    parser.add_argument(
-        "--mapbox-token",
-        help="Mapbox access token required for satellite basemap. Defaults to MAPBOX_TOKEN env var if omitted.",
-    )
-    parser.add_argument(
         "--video",
         help="Optional path for an MP4 video that flies the camera between stops.",
     )
@@ -164,20 +130,26 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.9,
         help=(
-            "Extra zoom applied on segments to get closer at stops (mapbox zoom +boost, globe scale * (1+boost*0.2))."
+            "Extra zoom applied on segments to get closer at stops (globe scale * (1+boost*0.2))."
         ),
-    )
-    parser.add_argument(
-        "--video-map-style",
-        default="auto",
-        choices=["auto", "styled", "satellite"],
-        help="Basemap preference for video export: auto (match map if possible), styled globe, or satellite.",
     )
     parser.add_argument(
         "--frame-format",
         default="png",
         choices=["png", "jpeg", "webp"],
         help="Image format for per-frame rendering during video export.",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=0,
+        help="Upper bound on rendered frames for video export (0 to disable).",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Parallel workers for video frame rendering (0 to auto-tune).",
     )
     parser.add_argument(
         "--route-style",
@@ -215,6 +187,15 @@ def build_path_segments(df: pd.DataFrame) -> Tuple[List[float], List[float]]:
     return lat_segments, lon_segments
 
 
+def build_path_segments_values(lats: List[float], lons: List[float]) -> Tuple[List[float], List[float]]:
+    lat_segments: List[float] = []
+    lon_segments: List[float] = []
+    for idx in range(len(lats) - 1):
+        lat_segments.extend([lats[idx], lats[idx + 1], None])
+        lon_segments.extend([lons[idx], lons[idx + 1], None])
+    return lat_segments, lon_segments
+
+
 def build_partial_path_segments(
     df: pd.DataFrame,
     seg_index: int,
@@ -245,6 +226,36 @@ def build_partial_path_segments(
     start_lon = float(df.loc[seg_index, "longitude"]) 
     end_lat = float(df.loc[seg_index + 1, "latitude"]) 
     end_lon = float(df.loc[seg_index + 1, "longitude"]) 
+    cur_lat, cur_lon = interpolate_lat_lon((start_lat, start_lon), (end_lat, end_lon), t)
+    lat_segments.extend([start_lat, cur_lat, None])
+    lon_segments.extend([start_lon, cur_lon, None])
+    return lat_segments, lon_segments
+
+
+def build_partial_path_segments_values(
+    lats: List[float],
+    lons: List[float],
+    seg_index: int,
+    seg_t: float,
+) -> Tuple[List[float], List[float]]:
+    if not lats or seg_index < 0:
+        return [], []
+    n = len(lats)
+    if seg_index >= n - 1:
+        return build_path_segments_values(lats, lons)
+
+    lat_segments: List[float] = []
+    lon_segments: List[float] = []
+
+    for idx in range(seg_index):
+        lat_segments.extend([lats[idx], lats[idx + 1], None])
+        lon_segments.extend([lons[idx], lons[idx + 1], None])
+
+    t = max(0.0, min(1.0, seg_t))
+    start_lat = float(lats[seg_index])
+    start_lon = float(lons[seg_index])
+    end_lat = float(lats[seg_index + 1])
+    end_lon = float(lons[seg_index + 1])
     cur_lat, cur_lon = interpolate_lat_lon((start_lat, start_lon), (end_lat, end_lon), t)
     lat_segments.extend([start_lat, cur_lat, None])
     lon_segments.extend([start_lon, cur_lon, None])
@@ -316,16 +327,6 @@ def haversine_km(start: Tuple[float, float], end: Tuple[float, float]) -> float:
     return EARTH_RADIUS_KM * c
 
 
-def initial_bearing(start: Tuple[float, float], end: Tuple[float, float]) -> float:
-    lat1, lon1 = math.radians(start[0]), math.radians(start[1])
-    lat2, lon2 = math.radians(end[0]), math.radians(end[1])
-    dlon = lon2 - lon1
-    x = math.sin(dlon) * math.cos(lat2)
-    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
-    bearing = math.degrees(math.atan2(x, y))
-    return ((bearing + 180.0) % 360.0) - 180.0
-
-
 def interpolate_lat_lon(start: Tuple[float, float], end: Tuple[float, float], t: float) -> Tuple[float, float]:
     lat = start[0] + (end[0] - start[0]) * t
     lon0 = start[1]
@@ -355,27 +356,6 @@ def segment_frame_count(distance_km: float) -> int:
     return min(base, 80)
 
 
-def zoom_for_distance(distance_km: float) -> float:
-    # Closer default zooms for dense city hops
-    if distance_km < 5:
-        return 13.0
-    if distance_km < 15:
-        return 11.0
-    if distance_km < 40:
-        return 9.0
-    if distance_km < 120:
-        return 7.2
-    if distance_km < 300:
-        return 5.8
-    if distance_km < 800:
-        return 4.4
-    if distance_km < 1600:
-        return 3.2
-    if distance_km < 3200:
-        return 2.1
-    return 1.3
-
-
 def ease_in_out(t: float) -> float:
     """Smoothstep easing for less jittery motion (cubic ease-in-out)."""
     # Clamp for safety
@@ -403,71 +383,6 @@ def scale_for_distance(distance_km: float) -> float:
     if distance_km < 1600:
         return 1.3
     return 1.0
-
-
-def create_mapbox_camera_frames(
-    df: pd.DataFrame, fps: int, linger_seconds: float, zoom_boost: float = 0.0
-) -> List[CameraFrame]:
-    if df.empty:
-        return []
-
-    centers = list(zip(df["latitude"], df["longitude"]))
-    linger_frames = max(1, int(fps * max(linger_seconds, 0.1)))
-    frames: List[CameraFrame] = []
-
-    if len(centers) == 1:
-        zoom = 6.0
-        bearing = 0.0
-        for _ in range(linger_frames * 2):
-            frames.append(CameraFrame(lat=centers[0][0], lon=centers[0][1], zoom=zoom, bearing=bearing))
-        return frames
-
-    first_segment_distance = haversine_km(centers[0], centers[1])
-    base_zoom = zoom_for_distance(first_segment_distance)
-    base_bearing = initial_bearing(centers[0], centers[1])
-    for _ in range(linger_frames):
-        frames.append(CameraFrame(lat=centers[0][0], lon=centers[0][1], zoom=base_zoom, bearing=base_bearing, seg_index=-1, seg_t=0.0))
-
-    prev_bearing = base_bearing
-    prev_zoom = base_zoom
-    for idx in range(len(centers) - 1):
-        start = centers[idx]
-        end = centers[idx + 1]
-        distance = haversine_km(start, end)
-        steps = segment_frame_count(distance)
-        target_zoom = zoom_for_distance(distance) + max(0.0, zoom_boost)
-        if math.isclose(distance, 0.0, abs_tol=1e-6):
-            bearing_delta = 0.0
-        else:
-            target_bearing = initial_bearing(start, end)
-            bearing_delta = normalize_bearing(target_bearing - prev_bearing)
-        if distance < 8:
-            bearing_delta = 0.0
-        elif distance < 40:
-            bearing_delta = 15.0 if bearing_delta >= 0 else -15.0
-        elif distance < 120:
-            # Keep small hops snappy but not abrupt
-            bearing_delta = 20.0 if bearing_delta >= 0 else -20.0
-        # If effectively same point, just linger
-        if distance < 0.3:
-            prev_bearing = prev_bearing + bearing_delta
-            prev_zoom = target_zoom
-            for _ in range(linger_frames):
-                frames.append(CameraFrame(lat=end[0], lon=end[1], zoom=prev_zoom, bearing=prev_bearing))
-            continue
-        for step in range(steps):
-            t = (step + 1) / steps
-            et = ease_in_out(t)
-            lat, lon = interpolate_lat_lon(start, end, et)
-            bearing = prev_bearing + bearing_delta * et
-            zoom = prev_zoom + (target_zoom - prev_zoom) * et
-            frames.append(CameraFrame(lat=lat, lon=lon, zoom=zoom, bearing=bearing, seg_index=idx, seg_t=et))
-        prev_bearing = prev_bearing + bearing_delta
-        prev_zoom = target_zoom
-        # Linger without zooming out to avoid the pan-out effect
-        for _ in range(linger_frames):
-            frames.append(CameraFrame(lat=end[0], lon=end[1], zoom=prev_zoom, bearing=prev_bearing, seg_index=idx, seg_t=1.0))
-    return frames
 
 
 def create_globe_frames(df: pd.DataFrame, fps: int, linger_seconds: float, zoom_boost: float = 0.0) -> List[GlobeFrame]:
@@ -520,6 +435,17 @@ def create_globe_frames(df: pd.DataFrame, fps: int, linger_seconds: float, zoom_
     return frames
 
 
+def limit_frame_defs(frame_defs: List[GlobeFrame], max_frames: int) -> List[GlobeFrame]:
+    if max_frames <= 0 or len(frame_defs) <= max_frames:
+        return frame_defs
+    if max_frames == 1:
+        return [frame_defs[-1]]
+    step = (len(frame_defs) - 1) / (max_frames - 1)
+    sampled = [frame_defs[int(i * step)] for i in range(max_frames)]
+    sampled[-1] = frame_defs[-1]
+    return sampled
+
+
 def render_styled_geo(
     df: pd.DataFrame,
     *,
@@ -537,6 +463,7 @@ def render_styled_geo(
     path_lon_override: Optional[List[float]] = None,
     label_offset_km: float = 8.0,
     reached_upto: Optional[int] = None,
+    include_hover: bool = True,
 ) -> go.Figure:
     path_lat, path_lon = build_path_segments(df)
     if path_lat_override is not None and path_lon_override is not None:
@@ -570,8 +497,11 @@ def render_styled_geo(
                 lon=df["longitude"],
                 mode="markers",
                 marker=dict(size=local_marker + 2, color="#ff9f1c", line=dict(width=2, color="#2b2d42")),
-                hovertext=marker_hover_text(df),
-                hoverinfo="text",
+                **(
+                    dict(hovertext=marker_hover_text(df), hoverinfo="text")
+                    if include_hover
+                    else dict(hoverinfo="skip")
+                ),
             )
         )
         # Numbers overlay
@@ -673,7 +603,7 @@ def render_styled_geo(
         steps = [
             dict(
                 method="animate",
-                args=[[f"step-{i}"], {"frame": {"duration": 600, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}],
+                args=[[f"step-{i}"], {"frame": {"duration": 600, "redraw": True}, "mode": "immediate", "transition": {"duration": 0}}],
                 label=str(i + 1),
             )
             for i in range(0, len(df))
@@ -683,217 +613,20 @@ def render_styled_geo(
                 dict(
                     type="buttons",
                     showactive=False,
-                    y=0.96,
+                    y=0.9,
+                    yanchor="top",
                     x=0.5,
                     xanchor="center",
                     buttons=[
                         dict(
                             label="Play",
                             method="animate",
-                            args=[None, {"frame": {"duration": 600, "redraw": False}, "fromcurrent": True, "transition": {"duration": 0}}],
+                            args=[None, {"frame": {"duration": 600, "redraw": True}, "fromcurrent": True, "transition": {"duration": 0}}],
                         ),
                         dict(
                             label="Pause",
                             method="animate",
-                            args=[[None], {"frame": {"duration": 0}, "mode": "immediate", "transition": {"duration": 0}}],
-                        ),
-                    ],
-                )
-            ],
-            sliders=[
-                dict(
-                    y=0.06,
-                    x=0.1,
-                    len=0.8,
-                    pad={"b": 10, "t": 50},
-                    active=0,
-                    steps=steps,
-                )
-            ],
-        )
-
-    return fig
-
-
-def render_satellite_map(
-    df: pd.DataFrame,
-    *,
-    title: str,
-    width: int,
-    height: int,
-    token: str,
-    center: Optional[Tuple[float, float]] = None,
-    zoom: Optional[float] = None,
-    bearing: float = 0.0,
-    pitch: float = 45.0,
-    mapbox_style: str = "satellite",
-    label_distance_km: float = 60.0,
-    marker_size: int = 26,
-    label_font_size: int = 13,
-    progressive_route: bool = False,
-    path_lat_override: Optional[List[float]] = None,
-    path_lon_override: Optional[List[float]] = None,
-    label_offset_km: float = 8.0,
-    reached_upto: Optional[int] = None,
-) -> go.Figure:
-    path_lat, path_lon = build_path_segments(df)
-    if path_lat_override is not None and path_lon_override is not None:
-        path_lat, path_lon = path_lat_override, path_lon_override
-    if progressive_route:
-        path_lat, path_lon = [], []
-    avg_lat = float(df["latitude"].mean()) if not df.empty else 0.0
-    avg_lon = float(df["longitude"].mean()) if not df.empty else 0.0
-    center_lat, center_lon = center or (avg_lat, avg_lon)
-
-    fig = go.Figure()
-
-    # Always add the path trace; it may start empty for progressive mode
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=path_lat,
-            lon=path_lon,
-            mode="lines",
-            line=dict(color="#16f4d0", width=4),
-            hoverinfo="skip",
-            opacity=0.8,
-        )
-    )
-
-    if not df.empty:
-        local_marker = max(10, int(marker_size))
-        local_label_font = max(9, int(label_font_size))
-        # Base shadow marker ring
-        fig.add_trace(
-            go.Scattermapbox(
-                lat=df["latitude"],
-                lon=df["longitude"],
-                mode="markers",
-                marker=dict(size=local_marker + 6, color="#023047", opacity=0.9),
-                hoverinfo="skip",
-            )
-        )
-        # Foreground marker with hover info
-        fig.add_trace(
-            go.Scattermapbox(
-                lat=df["latitude"],
-                lon=df["longitude"],
-                mode="markers",
-                marker=dict(size=local_marker, color="#ffb703", opacity=0.95),
-                hovertext=marker_hover_text(df),
-                hoverinfo="text",
-            )
-        )
-        # Numbers overlay
-        fig.add_trace(
-            go.Scattermapbox(
-                lat=df["latitude"],
-                lon=df["longitude"],
-                mode="text",
-                text=marker_numbers(df),
-                textposition="middle center",
-                textfont=dict(color="#001219", size=max(9, int(local_marker * 0.5))),
-                hoverinfo="skip",
-            )
-        )
-        # Titles overlay; hide unreached if reached_upto provided
-        full_titles = label_text(df)
-        if reached_upto is None:
-            active_upto = 0 if progressive_route else (len(df) - 1)
-        else:
-            active_upto = reached_upto
-        titles = [t if i <= active_upto else "" for i, t in enumerate(full_titles)]
-        fig.add_trace(
-            go.Scattermapbox(
-                lat=offset_latitudes(df["latitude"].tolist(), label_offset_km),
-                lon=df["longitude"],
-                mode="text",
-                text=titles,
-                textposition="top center",
-                textfont=dict(color="#f7f9fb", size=local_label_font),
-                hoverinfo="skip",
-            )
-        )
-
-    fig.update_layout(
-        showlegend=False,
-        width=width,
-        height=height,
-        autosize=False,
-        font=dict(family="DejaVu Sans, Arial, sans-serif"),
-        margin=dict(l=0, r=0, t=0, b=0),
-        paper_bgcolor="#000814",
-        mapbox=dict(
-            accesstoken=token,
-            style=mapbox_style,
-            domain=dict(x=[0, 1], y=[0, 1]),
-            center=dict(lat=center_lat, lon=center_lon),
-            zoom=zoom if zoom is not None else 1.4,
-            bearing=bearing,
-            pitch=pitch,
-        ),
-    )
-
-    # Title inside the map as an overlay annotation
-    if title:
-        fig.add_annotation(
-            x=0.5,
-            y=0.98,
-            xref="paper",
-            yref="paper",
-            xanchor="center",
-            yanchor="top",
-            text=title,
-            showarrow=False,
-            font=dict(size=26, color="#f7f9fb"),
-            bgcolor="rgba(0,8,20,0.55)",
-            borderpad=6,
-        )
-
-    # Progressive frames: one per stop, route grows cumulatively
-    if progressive_route and len(df) > 1:
-        frames = []
-        for upto in range(0, len(df)):
-            part_df = df.iloc[: upto + 1].reset_index(drop=True)
-            f_lat, f_lon = build_path_segments(part_df)
-            titles = [t if i <= upto else "" for i, t in enumerate(label_text(df))]
-            # traces: 0 path, 1 shadow markers, 2 markers, 3 numbers, 4 titles
-            frames.append(
-                go.Frame(
-                    name=f"step-{upto}",
-                    data=[
-                        go.Scattermapbox(lat=f_lat, lon=f_lon),
-                        go.Scattermapbox(text=titles),
-                    ],
-                    traces=[0, 4],
-                )
-            )
-        fig.frames = frames
-        steps = [
-            dict(
-                method="animate",
-                args=[[f"step-{i}"], {"frame": {"duration": 600, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}],
-                label=str(i + 1),
-            )
-            for i in range(0, len(df))
-        ]
-        fig.update_layout(
-            updatemenus=[
-                dict(
-                    type="buttons",
-                    showactive=False,
-                    y=0.96,
-                    x=0.5,
-                    xanchor="center",
-                    buttons=[
-                        dict(
-                            label="Play",
-                            method="animate",
-                            args=[None, {"frame": {"duration": 600, "redraw": False}, "fromcurrent": True, "transition": {"duration": 0}}],
-                        ),
-                        dict(
-                            label="Pause",
-                            method="animate",
-                            args=[[None], {"frame": {"duration": 0}, "mode": "immediate", "transition": {"duration": 0}}],
+                            args=[[None], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate", "transition": {"duration": 0}}],
                         ),
                     ],
                 )
@@ -924,77 +657,153 @@ def ensure_kaleido_available() -> None:
 
 
 def figure_to_image(fig: go.Figure, *, img_format: str = "png", width: int, height: int) -> bytes:
+    # Plotly/kaleido supports png, jpeg, webp, svg (we use raster formats)
+    # Use scale=1 explicitly to avoid devicePixelRatio variance across renders.
+    return fig.to_image(format=img_format, width=width, height=height, scale=1, validate=False)
+
+
+def start_kaleido_sync_server() -> None:
+    """Start Kaleido's persistent sync server (Kaleido v1) to avoid per-frame browser spin-up."""
     try:
-        # Plotly/kaleido supports png, jpeg, webp, svg (we use raster formats)
-        # Use scale=1 explicitly to avoid devicePixelRatio variance across renders.
-        return fig.to_image(format=img_format, width=width, height=height, scale=1, engine="kaleido")
-    except Exception as exc:  # pragma: no cover - depends on local kaleido runtime
-        msg = sanitize_error_message(str(exc))
-        if "mapbox" in msg.lower():
-            raise MapboxTileUnavailable(f"Mapbox static rendering failed: {msg}") from exc
-        raise
-
-
-def sanitize_error_message(msg: str) -> str:
-    """Best-effort redaction of sensitive tokens from error messages.
-
-    - Redacts URL params like access_token=...
-    - Redacts token-like substrings starting with pk./sk.
-    """
+        import kaleido  # type: ignore
+    except ImportError:
+        return
+    start = getattr(kaleido, "start_sync_server", None)
+    if start is None:
+        return
     try:
-        # access_token=... query params
-        msg = re.sub(r"(access_token=)([^&\s\"]+)", r"\1***redacted***", msg, flags=re.IGNORECASE)
-        # pk./sk. token substrings
-        msg = re.sub(r"\b(pk\.|sk\.)[A-Za-z0-9\._-]+", r"\1***redacted***", msg)
-        return msg
+        # silence_warnings avoids noisy "already running" messages on repeated calls.
+        start(silence_warnings=True)
     except Exception:
-        return msg
+        # If the server fails to start (missing chrome, sandbox restrictions, etc.),
+        # plotly will fall back to one-shot rendering and raise if unusable.
+        return
 
 
-def preflight_mapbox_snapshot(*, token: str, mapbox_style: str, frame_format: str) -> Optional[str]:
-    """Attempt a tiny Mapbox snapshot to verify static tile access.
-
-    Returns None on success; otherwise returns a sanitized diagnostic string.
-    """
+def stop_kaleido_sync_server() -> None:
     try:
-        ensure_kaleido_available()
-        # Minimal empty dataset centered at (0,0) is fine; we only need Mapbox layout to render.
-        empty_df = pd.DataFrame({col: [] for col in ["city", "country", "latitude", "longitude"]})
-        fig = render_satellite_map(
-            empty_df,
-            title="",
-            width=320,
-            height=200,
-            token=token or "",
-            center=(0.0, 0.0),
-            zoom=1.4,
-            bearing=0.0,
-            pitch=0.0,
-            mapbox_style=mapbox_style,
-            progressive_route=False,
-        )
-        # Try producing a small raster image
-        _ = figure_to_image(fig, img_format=frame_format or "png", width=320, height=200)
-        return None
-    except MapboxTileUnavailable as exc:
-        return sanitize_error_message(str(exc))
-    except RuntimeError as exc:
-        # Likely Kaleido missing or similar runtime issue
-        return sanitize_error_message(str(exc))
-    except Exception as exc:  # pragma: no cover - environment-specific
-        return sanitize_error_message(str(exc))
+        import kaleido  # type: ignore
+    except ImportError:
+        return
+    stop = getattr(kaleido, "stop_sync_server", None)
+    if stop is None:
+        return
+    try:
+        stop()
+    except Exception:
+        return
+
+
+class _VideoFrameWorkerState:
+    def __init__(
+        self,
+        *,
+        lats: List[float],
+        lons: List[float],
+        full_titles: List[str],
+        fig: go.Figure,
+        path_trace: Any,
+        title_trace: Any,
+        geo: Any,
+        width: int,
+        height: int,
+        frame_format: str,
+    ) -> None:
+        self.lats = lats
+        self.lons = lons
+        self.full_titles = full_titles
+        self.fig = fig
+        self.path_trace = path_trace
+        self.title_trace = title_trace
+        self.geo = geo
+        self.width = width
+        self.height = height
+        self.frame_format = frame_format
+
+
+_VIDEO_FRAME_WORKER_STATE: Optional[_VideoFrameWorkerState] = None
+
+
+def _reached_upto(frame: GlobeFrame) -> int:
+    return 0 if frame.seg_index < 0 else frame.seg_index + (1 if frame.seg_t >= 1.0 else 0)
+
+
+def _init_video_frame_worker(config: Dict[str, Any]) -> None:
+    global _VIDEO_FRAME_WORKER_STATE
+    start_kaleido_sync_server()
+
+    df = load_journey(Path(config["csv_path"]))
+    lats = df["latitude"].tolist()
+    lons = df["longitude"].tolist()
+    full_titles = label_text(df)
+
+    first_frame = config["first_frame"]
+    p_lat, p_lon = build_partial_path_segments_values(lats, lons, first_frame.seg_index, first_frame.seg_t)
+    fig = render_styled_geo(
+        df,
+        title=config["title"],
+        projection=config["projection"],
+        width=config["width"],
+        height=config["height"],
+        rotation=dict(lat=first_frame.lat, lon=first_frame.lon),
+        scale=first_frame.scale,
+        label_distance_km=config["label_distance_km"],
+        marker_size=config["marker_size"],
+        label_font_size=config["label_font_size"],
+        path_lat_override=p_lat,
+        path_lon_override=p_lon,
+        label_offset_km=config["label_offset_km"],
+        reached_upto=_reached_upto(first_frame),
+        include_hover=True,
+    )
+
+    path_trace = fig.data[0] if fig.data else None
+    title_trace = fig.data[3] if len(fig.data) > 3 else None
+    geo = fig.layout.geo
+    _VIDEO_FRAME_WORKER_STATE = _VideoFrameWorkerState(
+        lats=lats,
+        lons=lons,
+        full_titles=full_titles,
+        fig=fig,
+        path_trace=path_trace,
+        title_trace=title_trace,
+        geo=geo,
+        width=int(config["width"]),
+        height=int(config["height"]),
+        frame_format=str(config["frame_format"]),
+    )
+
+
+def _render_video_frame_bytes(frame: GlobeFrame) -> bytes:
+    state = _VIDEO_FRAME_WORKER_STATE
+    if state is None:
+        raise RuntimeError("Video frame worker not initialized.")
+    p_lat, p_lon = build_partial_path_segments_values(state.lats, state.lons, frame.seg_index, frame.seg_t)
+    if state.path_trace is not None:
+        state.path_trace.lat = p_lat
+        state.path_trace.lon = p_lon
+    if state.title_trace is not None:
+        upto = _reached_upto(frame)
+        state.title_trace.text = [t if i <= upto else "" for i, t in enumerate(state.full_titles)]
+    state.geo.projection.rotation = dict(lat=frame.lat, lon=frame.lon)
+    state.geo.projection.scale = frame.scale
+    return figure_to_image(
+        state.fig,
+        img_format=state.frame_format,
+        width=state.width,
+        height=state.height,
+    )
 
 
 def write_video(
     df: pd.DataFrame,
     *,
     args: argparse.Namespace,
-    preferred_mode: str,
-    token: Optional[str],
 ) -> None:
     ensure_kaleido_available()
     try:
         import imageio.v3 as iio
+        import imageio
     except ImportError as exc:
         raise RuntimeError(
             "Video export requires imageio. Install it with 'pip install imageio imageio-ffmpeg'."
@@ -1005,92 +814,23 @@ def write_video(
 
     if args.save_frames_dir:
         os.makedirs(args.save_frames_dir, exist_ok=True)
-    
-    def render_mode_frames(mode: str) -> List:
-        frame_defs = create_globe_frames(df, args.fps, args.linger, args.zoom_boost)
-        if not frame_defs:
-            raise RuntimeError("Cannot build video: the CSV has no locations.")
-        rendered: List = []
-        for frame_num, frame in enumerate(frame_defs):
-            p_lat, p_lon = build_partial_path_segments(df, frame.seg_index, frame.seg_t)
-            fig = render_styled_geo(
-                df,
-                title=args.title,
-                projection=args.projection,
-                width=args.width,
-                height=args.height,
-                rotation=dict(lat=frame.lat, lon=frame.lon),
-                scale=frame.scale,
-                label_distance_km=args.label_distance_km,
-                marker_size=max(12, int(args.marker_size * 0.9)),
-                label_font_size=max(10, int(args.label_font_size * 0.9)),
-                path_lat_override=p_lat,
-                path_lon_override=p_lon,
-                label_offset_km=args.label_offset_km,
-                reached_upto=(0 if frame.seg_index < 0 else frame.seg_index + (1 if frame.seg_t >= 1.0 else 0)),
-            )
-            image_bytes = figure_to_image(fig, img_format=args.frame_format, width=args.width, height=args.height)
-            ext = ".jpg" if args.frame_format == "jpeg" else f".{args.frame_format}"
-            rendered_frame = iio.imread(image_bytes, extension=ext)
-            print(f"Rendered frame {frame_num}:")
-            if frame_num >= 1:
-                # rendered_grayscale = np.dot(rendered_frame[..., :3], [0.2989, 0.5870, 0.1140])
-                # rendered_prev_grayscale = np.dot(rendered[-1][..., :3], [0.2989, 0.5870, 0.1140]
-                rendered_grayscale = rendered_frame.copy()
-                rendered_prev_grayscale = rendered[-1]
-                
-                # save as images
-                if args.save_frames_dir:
-                    iio.imwrite(os.path.join(args.save_frames_dir, f"frame_{frame_num}.jpg"), rendered_grayscale, extension=ext)
 
-                # difference = np.abs(rendered_grayscale - rendered_prev_grayscale) / (1e-6 + rendered_prev_grayscale.max())
-                # rel_difference = difference.mean() * 100   
-                
-                # ssim_value = (1 - ssim(rendered_grayscale, rendered_prev_grayscale, data_range=rendered_prev_grayscale.max() - rendered_prev_grayscale.min()))
-                # print(ssim_value) 
-                
-                percentage_diff_pixels = (rendered_grayscale != rendered_prev_grayscale).sum() / rendered_grayscale.size * 100
-                # print(f"Percentage of different pixels from previous frame: {percentage_diff_pixels} %")
-                if  percentage_diff_pixels > 33.:  
-                    print("Significant difference detected")
-                    continue
-            rendered.append(rendered_frame)
-        return rendered
+    frame_defs = create_globe_frames(df, args.fps, args.linger, args.zoom_boost)
+    if not frame_defs:
+        raise RuntimeError("Cannot build video: the CSV has no locations.")
+    original_count = len(frame_defs)
+    frame_defs = limit_frame_defs(frame_defs, args.max_frames)
+    if len(frame_defs) < original_count:
+        print(f"Info: reducing frames from {original_count} to {len(frame_defs)} (max_frames={args.max_frames}).")
 
-    # Preflight: if attempting Mapbox-based video, verify static tile access first
-    mode_to_render = preferred_mode
-    if preferred_mode == "mapbox":
-        diag = preflight_mapbox_snapshot(token=token or "", mapbox_style=args.mapbox_style, frame_format=args.frame_format)
-        if diag:
-            print("❌ Mapbox preflight check failed; falling back to the styled globe for video.")
-            # Provide a brief sanitized diagnostic to help the user fix their setup
-            # Common cases: Invalid token (401), Forbidden/referrer (403), offline/DNS errors
-            print(f"   Details: {diag}")
-            if token and not (str(token).startswith("pk.") or str(token).startswith("sk.")):
-                print("   Hint: The token does not look like a Mapbox token (expected to start with 'pk.' or 'sk.').")
-            low = diag.lower()
-            if ("401" in low) or ("unauthorized" in low) or ("invalid token" in low):
-                print("   Hint: Token is invalid or lacks scope for the requested style.")
-            elif ("403" in low) or ("forbidden" in low) or ("whitelist" in low) or ("referrer" in low):
-                print("   Hint: Token restrictions may block headless rendering. Use a Public token without URL referrer limits.")
-            elif ("enotfound" in low) or ("name resolution" in low) or ("err_name_not_resolved" in low):
-                print("   Hint: DNS/network issue. If behind a proxy, set HTTPS_PROXY/HTTP_PROXY so Kaleido can reach api.mapbox.com.")
-            elif ("econn" in low) or ("err_connection" in low) or ("timed out" in low) or ("timeout" in low):
-                print("   Hint: Connection blocked or timed out. Check firewall/VPN/proxy and allow api.mapbox.com.")
-            mode_to_render = "styled"
-
-    try:
-        rendered_frames = render_mode_frames(mode_to_render)
-    except MapboxTileUnavailable as exc:
-        if mode_to_render == "mapbox":
-            print("⚠️  Mapbox tiles unavailable during video capture; falling back to the styled globe for MP4 output.")
-            try:
-                print(f"   Details: {sanitize_error_message(str(exc))}")
-            except Exception:
-                pass
-            rendered_frames = render_mode_frames("styled")
-        else:
-            raise
+    total_frames = len(frame_defs)
+    workers = int(args.workers or 0)
+    if workers <= 0:
+        cpu = os.cpu_count() or 1
+        workers = 1 if total_frames < 200 else min(4, cpu)
+    workers = max(1, workers)
+    if workers > 1:
+        print(f"Info: rendering frames with {workers} workers.")
 
     # if args.save_frames_dir:
     #     frame_dir = Path(args.save_frames_dir)
@@ -1119,36 +859,150 @@ def write_video(
     }
 
     try:
+        marker_size = max(12, int(args.marker_size * 0.9))
+        label_font_size = max(10, int(args.label_font_size * 0.9))
+        ext = ".jpg" if args.frame_format == "jpeg" else f".{args.frame_format}"
+
+        def render_and_append(append_data) -> None:
+            prev_frame = None
+            glitch_threshold_pct = 33.0
+            sample_target = 200
+
+            def maybe_append_frame(image_bytes: bytes) -> None:
+                nonlocal prev_frame
+                rendered_frame = iio.imread(image_bytes, extension=ext)
+                if prev_frame is not None:
+                    if rendered_frame.shape != prev_frame.shape:
+                        print("Significant difference detected")
+                        return
+                    height, width = rendered_frame.shape[:2]
+                    stride = max(1, int(max(height, width) / sample_target))
+                    sample_frame = rendered_frame[::stride, ::stride]
+                    prev_sample = prev_frame[::stride, ::stride]
+                    sample_diff = (sample_frame != prev_sample).sum()
+                    sample_pct = sample_diff / sample_frame.size * 100
+                    if sample_pct > glitch_threshold_pct:
+                        full_diff = (rendered_frame != prev_frame).sum()
+                        full_pct = full_diff / rendered_frame.size * 100
+                        if full_pct > glitch_threshold_pct:
+                            print("Significant difference detected")
+                            return
+                append_data(rendered_frame)
+                prev_frame = rendered_frame
+
+            if workers == 1:
+                start_kaleido_sync_server()
+                try:
+                    lats = df["latitude"].tolist()
+                    lons = df["longitude"].tolist()
+                    full_titles = label_text(df)
+
+                    first_frame = frame_defs[0]
+                    p_lat, p_lon = build_partial_path_segments_values(lats, lons, first_frame.seg_index, first_frame.seg_t)
+                    fig = render_styled_geo(
+                        df,
+                        title=args.title,
+                        projection=args.projection,
+                        width=args.width,
+                        height=args.height,
+                        rotation=dict(lat=first_frame.lat, lon=first_frame.lon),
+                        scale=first_frame.scale,
+                        label_distance_km=args.label_distance_km,
+                        marker_size=marker_size,
+                        label_font_size=label_font_size,
+                        path_lat_override=p_lat,
+                        path_lon_override=p_lon,
+                        label_offset_km=args.label_offset_km,
+                        reached_upto=_reached_upto(first_frame),
+                        include_hover=True,
+                    )
+
+                    path_trace = fig.data[0] if fig.data else None
+                    title_trace = fig.data[3] if len(fig.data) > 3 else None
+                    geo = fig.layout.geo
+
+                    for frame_num, frame in enumerate(frame_defs):
+                        if frame_num:
+                            p_lat, p_lon = build_partial_path_segments_values(lats, lons, frame.seg_index, frame.seg_t)
+                            if path_trace is not None:
+                                path_trace.lat = p_lat
+                                path_trace.lon = p_lon
+                            if title_trace is not None:
+                                upto = _reached_upto(frame)
+                                title_trace.text = [t if i <= upto else "" for i, t in enumerate(full_titles)]
+                            geo.projection.rotation = dict(lat=frame.lat, lon=frame.lon)
+                            geo.projection.scale = frame.scale
+
+                        if total_frames <= 20 or frame_num % 10 == 0 or frame_num == total_frames - 1:
+                            print(f"Rendered frame {frame_num + 1}/{total_frames}")
+
+                        image_bytes = figure_to_image(
+                            fig,
+                            img_format=args.frame_format,
+                            width=args.width,
+                            height=args.height,
+                        )
+
+                        if args.save_frames_dir:
+                            with open(os.path.join(args.save_frames_dir, f"frame_{frame_num:05d}{ext}"), "wb") as handle:
+                                handle.write(image_bytes)
+
+                        maybe_append_frame(image_bytes)
+                finally:
+                    stop_kaleido_sync_server()
+            else:
+                import multiprocessing as mp
+
+                config: Dict[str, Any] = dict(
+                    csv_path=str(args.csv_path),
+                    title=str(args.title),
+                    projection=str(args.projection),
+                    width=int(args.width),
+                    height=int(args.height),
+                    label_distance_km=float(args.label_distance_km),
+                    marker_size=marker_size,
+                    label_font_size=label_font_size,
+                    label_offset_km=float(args.label_offset_km),
+                    frame_format=str(args.frame_format),
+                    first_frame=frame_defs[0],
+                )
+
+                ctx = mp.get_context("spawn")
+                with ctx.Pool(processes=workers, initializer=_init_video_frame_worker, initargs=(config,)) as pool:
+                    for frame_num, image_bytes in enumerate(pool.imap(_render_video_frame_bytes, frame_defs, chunksize=2)):
+                        if total_frames <= 20 or frame_num % 10 == 0 or frame_num == total_frames - 1:
+                            print(f"Rendered frame {frame_num + 1}/{total_frames}")
+
+                        if args.save_frames_dir:
+                            with open(os.path.join(args.save_frames_dir, f"frame_{frame_num:05d}{ext}"), "wb") as handle:
+                                handle.write(image_bytes)
+
+                        maybe_append_frame(image_bytes)
+
+        if chosen_fmt not in codec_by_fmt and chosen_fmt != "gif":
+            output_path = output_path.with_suffix(".mp4")
+            chosen_fmt = "mp4"
+            print(f"ℹ️  Unknown --video-format; falling back to {output_path.name}")
+
         if chosen_fmt in codec_by_fmt:
-            write_kwargs = dict(
+            write_kwargs: Dict[str, Any] = dict(
                 fps=args.fps,
                 codec=codec_by_fmt[chosen_fmt],
                 bitrate=args.bitrate,
                 macro_block_size=1,
             )
             try:
-                iio.imwrite(output_path, rendered_frames, **write_kwargs)
+                writer = imageio.get_writer(output_path, **write_kwargs)
             except TypeError:
-                # Older backends may not support some kwargs; retry with minimal set
                 write_kwargs.pop("macro_block_size", None)
-                iio.imwrite(output_path, rendered_frames, **write_kwargs)
-        elif chosen_fmt == "gif":
-            iio.imwrite(
-                output_path,
-                rendered_frames,
-                fps=args.fps,
-                subrectangles=False,
-                loop=0,
-                disposal=2,
-            )
-        else:  # Fallback to mp4 if unknown
-            iio.imwrite(
-                output_path.with_suffix(".mp4"),
-                rendered_frames,
-                fps=args.fps,
-                codec="libx264",
-                bitrate=args.bitrate,
-            )
+                writer = imageio.get_writer(output_path, **write_kwargs)
+        else:
+            writer = imageio.get_writer(output_path, fps=args.fps, loop=0)
+
+        try:
+            render_and_append(writer.append_data)
+        finally:
+            writer.close()
     except RuntimeError as exc:  # pragma: no cover - depends on local codecs
         raise RuntimeError(
             "imageio could not find a working ffmpeg/codec. Install 'imageio-ffmpeg' and ensure ffmpeg is available."
@@ -1165,38 +1019,18 @@ def main() -> None:
 
     df = load_journey(csv_path)
 
-    token = args.mapbox_token or os.environ.get("MAPBOX_TOKEN")
-    use_mapbox = args.map_style == "satellite" and token
-    if args.map_style == "satellite" and not token:
-        print("⚠️  Mapbox token not found; falling back to the styled globe basemap.")
-
-    if use_mapbox:
-        fig = render_satellite_map(
-            df,
-            title=args.title,
-            width=args.width,
-            height=args.height,
-            token=token or "",
-            mapbox_style=args.mapbox_style,
-            label_distance_km=args.label_distance_km,
-            marker_size=args.marker_size,
-            label_font_size=args.label_font_size,
-            progressive_route=(args.route_style == "progressive"),
-            label_offset_km=args.label_offset_km,
-        )
-    else:
-        fig = render_styled_geo(
-            df,
-            title=args.title,
-            projection=args.projection,
-            width=args.width,
-            height=args.height,
-            label_distance_km=args.label_distance_km,
-            marker_size=args.marker_size,
-            label_font_size=args.label_font_size,
-            progressive_route=(args.route_style == "progressive"),
-            label_offset_km=args.label_offset_km,
-        )
+    fig = render_styled_geo(
+        df,
+        title=args.title,
+        projection=args.projection,
+        width=args.width,
+        height=args.height,
+        label_distance_km=args.label_distance_km,
+        marker_size=args.marker_size,
+        label_font_size=args.label_font_size,
+        progressive_route=(args.route_style == "progressive"),
+        label_offset_km=args.label_offset_km,
+    )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1204,22 +1038,9 @@ def main() -> None:
     print(f"✨ Journey map written to {output_path.resolve()}")
 
     if args.video:
-        video_preference = args.video_map_style
-        token_available = bool(token)
-        if video_preference == "satellite":
-            if not token_available:
-                print("⚠️  Satellite video requested but no Mapbox token found; using styled globe instead.")
-                preferred_mode = "styled"
-        elif video_preference == "styled":
-            preferred_mode = "styled"
-        else:  # auto
-            preferred_mode = "styled"
-
         write_video(
             df,
             args=args,
-            preferred_mode=preferred_mode,
-            token=token,
         )
 
 

@@ -5,3 +5,5 @@ imageio>=2.31
 imageio-ffmpeg>=0.4
 Pillow>=9.0
 scikit-image>=0.19
+Flask>=3.0.0
+gunicorn>=21.2.0
