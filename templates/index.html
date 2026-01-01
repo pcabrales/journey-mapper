@@ -154,7 +154,9 @@
       }
 
       input[type="text"],
-      input[type="file"] {
+      input[type="file"],
+      input[type="number"],
+      input[type="date"] {
         width: 100%;
         padding: 12px 14px;
         border-radius: 10px;
@@ -182,6 +184,109 @@
         margin-top: 6px;
       }
 
+      .stops-block {
+        display: grid;
+        gap: 14px;
+      }
+
+      .stops-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .stops-head h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      .stops-head p {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: var(--ink-soft);
+      }
+
+      .table-wrap {
+        border-radius: 16px;
+        border: 1px solid #eadfce;
+        background: #fff;
+        overflow-x: auto;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+      }
+
+      .stops-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 820px;
+        font-size: 13px;
+      }
+
+      .stops-table thead {
+        background: #fff4e4;
+      }
+
+      .stops-table th {
+        text-align: left;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-soft);
+        padding: 12px 10px;
+        border-bottom: 1px solid #eadfce;
+      }
+
+      .stops-table td {
+        padding: 10px;
+        border-bottom: 1px solid #f0e7d9;
+      }
+
+      .stops-table tbody tr:nth-child(even) {
+        background: #fffdf8;
+      }
+
+      .stops-table tbody tr:focus-within {
+        background: rgba(11, 114, 133, 0.08);
+      }
+
+      .stops-table input {
+        padding: 8px 10px;
+        font-size: 13px;
+        border-radius: 8px;
+      }
+
+      .col-index {
+        width: 42px;
+      }
+
+      .col-city,
+      .col-country {
+        min-width: 140px;
+      }
+
+      .col-lat,
+      .col-lon {
+        min-width: 130px;
+      }
+
+      .col-date {
+        min-width: 140px;
+      }
+
+      .col-notes {
+        min-width: 200px;
+      }
+
+      .col-remove {
+        width: 48px;
+      }
+
+      .row-index {
+        font-weight: 700;
+        color: var(--accent-2);
+      }
+
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -206,11 +311,39 @@
         transform: translateY(-1px);
       }
 
+      button.ghost {
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid #eadfce;
+        box-shadow: none;
+      }
+
+      button.row-action {
+        padding: 6px 8px;
+        border-radius: 10px;
+        background: #fff;
+        border: 1px solid #eadfce;
+        color: #a35641;
+        box-shadow: none;
+        font-size: 16px;
+        line-height: 1;
+      }
+
       button[disabled] {
         cursor: default;
         opacity: 0.7;
         box-shadow: none;
         transform: none;
+      }
+
+      input:focus {
+        outline: none;
+        border-color: rgba(11, 114, 133, 0.5);
+        box-shadow: 0 0 0 3px rgba(11, 114, 133, 0.18);
+      }
+
+      input::placeholder {
+        color: rgba(75, 85, 99, 0.6);
       }
 
       .tiny {
@@ -329,31 +462,30 @@
     <div class="shell">
       <header class="topbar reveal">
         <div class="brand">Journey Mapper</div>
-        <div class="tagline">Turn a CSV of stops into a globe-spanning story.</div>
+        <div class="tagline">Build a journey stop by stop and watch it sweep the globe.</div>
       </header>
 
       <main class="grid">
         <section class="card intro reveal delay-1">
           <h1>Plot the trip. Take in the journey.</h1>
-          <p>Upload a list of cities with coordinates and watch the route draw itself across the globe.</p>
+          <p>Enter your cities, drop in coordinates, and watch the route draw itself across the globe.</p>
           <div class="pill-row">
-            <div class="pill">CSV-driven</div>
             <div class="pill">Optional MP4</div>
           </div>
           <div class="steps">
             <div class="step">
               <span>1</span>
-              <p>Choose the example data or upload your own CSV with city, country, latitude, longitude.</p>
+              <p>Add at least two stops with city, country, latitude, and longitude in travel order.</p>
             </div>
             <div class="step">
               <span>2</span>
-              <p>Pick a title and export a polished HTML map. Add the video if you want a flyover.</p>
+              <p>Optionally add dates and notes, then generate the map or export the flyover.</p>
             </div>
           </div>
         </section>
 
         <section class="card reveal delay-2">
-          <form action="/generate" method="post" enctype="multipart/form-data">
+          <form action="/generate" method="post">
             <div>
               <label for="title">Title</label>
               <input id="title" name="title" type="text" value="Journey Mapper" />
@@ -366,14 +498,135 @@
               </div>
             </div>
 
-            <div>
-              <label>Data source</label>
-              <div class="radio-group">
-                <label><input type="radio" name="mode" value="example" checked /> Use example CSV</label>
-                <label><input type="radio" name="mode" value="upload" /> Upload CSV</label>
+            <div class="stops-block">
+              <div class="stops-head">
+                <div>
+                  <h2>Journey stops</h2>
+                  <p>Enter at least two stops in travel order.</p>
+                </div>
+                <button class="ghost" type="button" id="add-row">Add stop</button>
               </div>
-              <input id="csv" name="csv" type="file" accept=".csv" />
-              <div class="hint">Required columns: city, country, latitude, longitude.</div>
+
+              <div class="table-wrap">
+                <table class="stops-table" aria-label="Journey stops">
+                  <thead>
+                    <tr>
+                      <th class="col-index" scope="col">#</th>
+                      <th class="col-city" scope="col">City</th>
+                      <th class="col-country" scope="col">Country</th>
+                      <th class="col-lat" scope="col">Latitude</th>
+                      <th class="col-lon" scope="col">Longitude</th>
+                      <th class="col-date" scope="col">Date</th>
+                      <th class="col-notes" scope="col">Notes</th>
+                      <th class="col-remove" scope="col"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="stops-body">
+                    <tr>
+                      <td class="row-index" data-row-number>1</td>
+                      <td class="col-city">
+                        <input name="city" type="text" placeholder="Lisbon" required />
+                      </td>
+                      <td class="col-country">
+                        <input name="country" type="text" placeholder="Portugal" required />
+                      </td>
+                      <td class="col-lat">
+                        <input
+                          name="latitude"
+                          type="number"
+                          inputmode="decimal"
+                          step="any"
+                          min="-90"
+                          max="90"
+                          placeholder="38.7223"
+                          required
+                        />
+                      </td>
+                      <td class="col-lon">
+                        <input
+                          name="longitude"
+                          type="number"
+                          inputmode="decimal"
+                          step="any"
+                          min="-180"
+                          max="180"
+                          placeholder="-9.1393"
+                          required
+                        />
+                      </td>
+                      <td class="col-date">
+                        <input name="date" type="date" />
+                      </td>
+                      <td class="col-notes">
+                        <input name="notes" type="text" placeholder="Optional notes" />
+                      </td>
+                      <td class="col-remove">
+                        <button
+                          type="button"
+                          class="row-action"
+                          data-action="remove-row"
+                          aria-label="Remove row"
+                          disabled
+                        >
+                          &times;
+                        </button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="row-index" data-row-number>2</td>
+                      <td class="col-city">
+                        <input name="city" type="text" placeholder="Bangkok" required />
+                      </td>
+                      <td class="col-country">
+                        <input name="country" type="text" placeholder="Thailand" required />
+                      </td>
+                      <td class="col-lat">
+                        <input
+                          name="latitude"
+                          type="number"
+                          inputmode="decimal"
+                          step="any"
+                          min="-90"
+                          max="90"
+                          placeholder="13.7563"
+                          required
+                        />
+                      </td>
+                      <td class="col-lon">
+                        <input
+                          name="longitude"
+                          type="number"
+                          inputmode="decimal"
+                          step="any"
+                          min="-180"
+                          max="180"
+                          placeholder="100.5018"
+                          required
+                        />
+                      </td>
+                      <td class="col-date">
+                        <input name="date" type="date" />
+                      </td>
+                      <td class="col-notes">
+                        <input name="notes" type="text" placeholder="Optional notes" />
+                      </td>
+                      <td class="col-remove">
+                        <button
+                          type="button"
+                          class="row-action"
+                          data-action="remove-row"
+                          aria-label="Remove row"
+                          disabled
+                        >
+                          &times;
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="hint">Required: city, country, latitude, longitude. Optional: date, notes.</div>
             </div>
 
             <div class="actions">
@@ -388,6 +641,53 @@
               </div>
               <p id="progress-text" class="progress-text">Building your interactive HTML map.</p>
             </div>
+
+            <template id="stop-row-template">
+              <tr>
+                <td class="row-index" data-row-number></td>
+                <td class="col-city">
+                  <input name="city" type="text" placeholder="City" required />
+                </td>
+                <td class="col-country">
+                  <input name="country" type="text" placeholder="Country" required />
+                </td>
+                <td class="col-lat">
+                  <input
+                    name="latitude"
+                    type="number"
+                    inputmode="decimal"
+                    step="any"
+                    min="-90"
+                    max="90"
+                    placeholder="Latitude"
+                    required
+                  />
+                </td>
+                <td class="col-lon">
+                  <input
+                    name="longitude"
+                    type="number"
+                    inputmode="decimal"
+                    step="any"
+                    min="-180"
+                    max="180"
+                    placeholder="Longitude"
+                    required
+                  />
+                </td>
+                <td class="col-date">
+                  <input name="date" type="date" />
+                </td>
+                <td class="col-notes">
+                  <input name="notes" type="text" placeholder="Optional notes" />
+                </td>
+                <td class="col-remove">
+                  <button type="button" class="row-action" data-action="remove-row" aria-label="Remove row">
+                    &times;
+                  </button>
+                </td>
+              </tr>
+            </template>
           </form>
         </section>
       </main>
@@ -399,6 +699,147 @@
       const progressText = document.getElementById("progress-text");
       const submitButton = form ? form.querySelector("button[type='submit']") : null;
       const wantVideo = document.getElementById("want_video");
+      const stopsBody = document.getElementById("stops-body");
+      const addRowButton = document.getElementById("add-row");
+      const stopRowTemplate = document.getElementById("stop-row-template");
+      const MIN_ROWS = 2;
+      const DEFAULT_STOPS = [
+        {
+          city: "Lisbon",
+          country: "Portugal",
+          latitude: "38.7223",
+          longitude: "-9.1393",
+          date: "",
+          notes: "",
+        },
+        {
+          city: "Bangkok",
+          country: "Thailand",
+          latitude: "13.7563",
+          longitude: "100.5018",
+          date: "",
+          notes: "",
+        },
+      ];
+
+      const getRowInputs = (row) => ({
+        city: row.querySelector("input[name='city']"),
+        country: row.querySelector("input[name='country']"),
+        latitude: row.querySelector("input[name='latitude']"),
+        longitude: row.querySelector("input[name='longitude']"),
+        date: row.querySelector("input[name='date']"),
+        notes: row.querySelector("input[name='notes']"),
+      });
+
+      const rowHasValue = (inputs) =>
+        Object.values(inputs).some((input) => input && input.value.trim() !== "");
+
+      const applyDefaultStopsIfEmpty = () => {
+        if (!stopsBody) {
+          return false;
+        }
+        const rows = Array.from(stopsBody.querySelectorAll("tr"));
+        if (rows.length < MIN_ROWS) {
+          return false;
+        }
+        const hasAnyValues = rows.some((row) => rowHasValue(getRowInputs(row)));
+        if (hasAnyValues) {
+          return false;
+        }
+        rows.slice(0, MIN_ROWS).forEach((row, index) => {
+          const inputs = getRowInputs(row);
+          const defaults = DEFAULT_STOPS[index];
+          if (!defaults) {
+            return;
+          }
+          if (inputs.city) {
+            inputs.city.value = defaults.city;
+          }
+          if (inputs.country) {
+            inputs.country.value = defaults.country;
+          }
+          if (inputs.latitude) {
+            inputs.latitude.value = defaults.latitude;
+          }
+          if (inputs.longitude) {
+            inputs.longitude.value = defaults.longitude;
+          }
+          if (inputs.date) {
+            inputs.date.value = defaults.date;
+          }
+          if (inputs.notes) {
+            inputs.notes.value = defaults.notes;
+          }
+        });
+        return true;
+      };
+
+      const updateRowNumbers = () => {
+        if (!stopsBody) {
+          return;
+        }
+        const rows = Array.from(stopsBody.querySelectorAll("tr"));
+        rows.forEach((row, index) => {
+          const label = row.querySelector("[data-row-number]");
+          if (label) {
+            label.textContent = index + 1;
+          }
+        });
+        const allowRemove = rows.length > MIN_ROWS;
+        rows.forEach((row) => {
+          const removeButton = row.querySelector("[data-action='remove-row']");
+          if (removeButton) {
+            removeButton.disabled = !allowRemove;
+          }
+        });
+      };
+
+      const addRow = () => {
+        if (!stopsBody || !stopRowTemplate) {
+          return;
+        }
+        const templateRow = stopRowTemplate.content.firstElementChild;
+        if (!templateRow) {
+          return;
+        }
+        const newRow = templateRow.cloneNode(true);
+        stopsBody.appendChild(newRow);
+        updateRowNumbers();
+        const focusTarget = newRow.querySelector("input[name='city']");
+        if (focusTarget) {
+          focusTarget.focus();
+        }
+      };
+
+      if (stopsBody && addRowButton && stopRowTemplate) {
+        addRowButton.addEventListener("click", addRow);
+
+        stopsBody.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) {
+            return;
+          }
+          if (target.matches("[data-action='remove-row']")) {
+            const rows = stopsBody.querySelectorAll("tr");
+            if (rows.length <= MIN_ROWS) {
+              return;
+            }
+            const row = target.closest("tr");
+            if (row) {
+              row.remove();
+              updateRowNumbers();
+            }
+          }
+        });
+
+        updateRowNumbers();
+      }
+
+      if (submitButton) {
+        submitButton.addEventListener("click", () => {
+          applyDefaultStopsIfEmpty();
+        });
+      }
 
       if (form && progressWrap && progressTitle && progressText && submitButton) {
         form.addEventListener("submit", async (event) => {

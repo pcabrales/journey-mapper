@@ -4,6 +4,8 @@ __pycache__
 *.pyc
 .DS_Store
 .vscode
+.env
+deployment.env
 data/*
 !data/example_journey.csv
 !data/repo-cover.png
@@ -13,4 +15,3 @@ journey_map.html
 builds/*
 !builds/global_journey.html
 !builds/global_journey.gif
-

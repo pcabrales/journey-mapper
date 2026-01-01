@@ -66,3 +66,92 @@ Add `--video builds/global_journey.mp4` to also generate a camera flyover. Open 
 ## Troubleshooting
 - For non-Latin characters, save your CSV with UTF-8 encoding.
 - Coordinates must be decimal degrees; the script raises an error if it cannot parse them.
+
+## Deployment (Cloud Run)
+
+Public URL: https://YOUR-SERVICE-URL (fill in after deploy)
+
+How it works: the Docker container runs `server.py` with Gunicorn on Cloud Run. Each run writes its generated HTML/video to `/tmp` inside the container and serves it back via `/map/<run_id>` and `/video/<run_id>`.
+
+Important: `/tmp` is ephemeral and instance-local on Cloud Run. To avoid “Not Found” errors after generating a run, we deploy with `--max-instances 1` and `--concurrency 1` so requests for a given run stay on the same instance.
+
+Note: this trades off horizontal scaling for correctness with ephemeral storage. If you want the service to scale to multiple instances reliably, store outputs in Google Cloud Storage instead of `/tmp`.
+
+### One-time setup
+
+```bash
+# Real values are kept in a local file not committed to git: deployment.env
+# set -a; source deployment.env; set +a
+
+export PROJECT_ID="your-project-id"
+export REGION="europe-southwest1"   # pick a region close to you
+export SERVICE_NAME="journey-mapper" # Cloud Run service name
+
+gcloud auth login
+gcloud config set project "$PROJECT_ID"
+
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+```
+
+### Build + deploy (manual)
+
+```bash
+export PROJECT_ID="your-project-id"
+export REGION="europe-southwest1"
+export SERVICE_NAME="journey-mapper"
+
+gcloud config set project "$PROJECT_ID"
+gcloud builds submit --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME:latest"
+gcloud run deploy "$SERVICE_NAME" \
+  --image "gcr.io/$PROJECT_ID/$SERVICE_NAME:latest" \
+  --region "$REGION" \
+  --platform managed \
+  --allow-unauthenticated \
+  --memory 1Gi \
+  --cpu 1 \
+  --concurrency 1 \
+  --timeout 900 \
+  --max-instances 1
+```
+
+After deploy, fetch the public URL:
+```bash
+gcloud run services describe "$SERVICE_NAME" \
+  --region "$REGION" \
+  --format="value(status.url)"
+```
+
+### Auto-deploy on push to `main` (Cloud Build)
+
+This repo includes `cloudbuild.yaml`, which builds the Docker image and deploys it to Cloud Run with the same runtime settings as above.
+
+1. In Google Cloud Console: Cloud Build → Triggers → Create trigger
+   - Event: “Push to a branch”
+   - Branch: `^main$`
+   - Configuration: `cloudbuild.yaml`
+2. Ensure the Cloud Build service account can deploy:
+   ```bash
+   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+
+   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+     --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+     --role="roles/run.admin"
+
+   gcloud iam service-accounts add-iam-policy-binding \
+     "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+     --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+     --role="roles/iam.serviceAccountUser"
+   ```
+
+If Cloud Build fails to push images or write logs, grant these too:
+```bash
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/logging.logWriter"
+```

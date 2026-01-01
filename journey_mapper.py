@@ -16,7 +16,7 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 REQUIRED_COLUMNS = {"city", "country", "latitude", "longitude"}
-OPTIONAL_COLUMNS = ["date", "notes", "description"]
+OPTIONAL_COLUMNS = ["notes", "description"]
 EARTH_RADIUS_KM = 6371.0
 
 
@@ -266,14 +266,33 @@ def marker_numbers(df: pd.DataFrame) -> List[str]:
     return [str(idx + 1) for idx in range(len(df))]
 
 
+def optional_value(row: pd.Series, key: str) -> Optional[str]:
+    if key not in row:
+        return None
+    value = row[key]
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def stop_title(row: pd.Series) -> str:
+    base = f"{row['city']}, {row['country']}"
+    date_text = optional_value(row, "date")
+    if date_text:
+        return f"{base}, {date_text}"
+    return base
+
+
 def marker_hover_text(df: pd.DataFrame) -> List[str]:
     hover_lines: List[str] = []
     for _, row in df.iterrows():
-        details: List[str] = [f"<b>{row['city']}, {row['country']}, {row['date']}</b>"]
+        details: List[str] = [f"<b>{stop_title(row)}</b>"]
         for optional in OPTIONAL_COLUMNS:
-            if optional in row and pd.notna(row[optional]):
+            value = optional_value(row, optional)
+            if value:
                 label = optional.capitalize()
-                details.append(f"{label}: {row[optional]}")
+                details.append(f"{label}: {value}")
         hover_lines.append("<br>".join(details) + "<extra></extra>")
     return hover_lines
 
@@ -281,7 +300,7 @@ def marker_hover_text(df: pd.DataFrame) -> List[str]:
 def label_text(df: pd.DataFrame) -> List[str]:
     labels: List[str] = []
     for idx, row in df.iterrows():
-        labels.append(f"{idx + 1}. {row['city']}, {row['country']}, {row['date']}")
+        labels.append(f"{idx + 1}. {stop_title(row)}")
     return labels
 
 
@@ -367,22 +386,22 @@ def ease_in_out(t: float) -> float:
 
 
 def scale_for_distance(distance_km: float) -> float:
-    # Stronger zoom-in for close segments on the styled globe
-    if distance_km < 5:
-        return 6.0
-    if distance_km < 15:
-        return 5.2
-    if distance_km < 40:
-        return 4.5
-    if distance_km < 120:
-        return 3.4
-    if distance_km < 300:
-        return 2.6
-    if distance_km < 800:
+    # Keep close hops readable without excessive zoom at each stop.
+    if distance_km < 10:
+        return 3.2
+    if distance_km < 30:
+        return 2.9
+    if distance_km < 80:
+        return 2.5
+    if distance_km < 200:
+        return 2.1
+    if distance_km < 500:
         return 1.8
-    if distance_km < 1600:
+    if distance_km < 1200:
+        return 1.5
+    if distance_km < 2500:
         return 1.3
-    return 1.0
+    return 1.1
 
 
 def create_globe_frames(df: pd.DataFrame, fps: int, linger_seconds: float, zoom_boost: float = 0.0) -> List[GlobeFrame]:
@@ -481,7 +500,7 @@ def render_styled_geo(
             lat=path_lat,
             lon=path_lon,
             mode="lines",
-            line=dict(color="#00d1ff", width=3),
+            line=dict(color="#f25f3a", width=3),
             hoverinfo="skip",
             opacity=0.9,
         )
@@ -496,7 +515,7 @@ def render_styled_geo(
                 lat=df["latitude"],
                 lon=df["longitude"],
                 mode="markers",
-                marker=dict(size=local_marker + 2, color="#ff9f1c", line=dict(width=2, color="#2b2d42")),
+                marker=dict(size=local_marker + 2, color="#ffd7b3", line=dict(width=2, color="#f25f3a")),
                 **(
                     dict(hovertext=marker_hover_text(df), hoverinfo="text")
                     if include_hover
@@ -512,7 +531,7 @@ def render_styled_geo(
                 mode="text",
                 text=marker_numbers(df),
                 textposition="middle center",
-                textfont=dict(color="#001219", size=max(9, int(local_marker * 0.5))),
+                textfont=dict(color="#4b2314", size=max(9, int(local_marker * 0.5))),
                 hoverinfo="skip",
             )
         )
@@ -531,7 +550,7 @@ def render_styled_geo(
                 mode="text",
                 text=titles,
                 textposition="top center",
-                textfont=dict(color="#edf2f4", size=local_label_font),
+                textfont=dict(color="#fdf2e9", size=local_label_font),
                 hoverinfo="skip",
             )
         )
@@ -541,8 +560,8 @@ def render_styled_geo(
         width=width,
         height=height,
         autosize=False,
-        font=dict(family="DejaVu Sans, Arial, sans-serif"),
-        paper_bgcolor="#0b132b",
+        font=dict(family="Space Grotesk, Avenir Next, Segoe UI, DejaVu Sans, sans-serif"),
+        paper_bgcolor="#0b1c2b",
         margin=dict(l=0, r=0, t=0, b=0),
         geo=dict(
             projection=dict(
@@ -552,15 +571,15 @@ def render_styled_geo(
             ),
             domain=dict(x=[0, 1], y=[0, 1]),
             showland=True,
-            landcolor="#1d3557",
+            landcolor="#1f4e5a",
             showcountries=True,
-            countrycolor="#f1faee",
+            countrycolor="#dfe9ec",
             showocean=True,
-            oceancolor="#073b4c",
+            oceancolor="#0b2a3a",
             showcoastlines=True,
-            coastlinecolor="#118ab2",
+            coastlinecolor="#6fa9b3",
             showframe=False,
-            bgcolor="#0b132b",
+            bgcolor="#0b1c2b",
         ),
     )
 
@@ -575,8 +594,8 @@ def render_styled_geo(
             yanchor="top",
             text=title,
             showarrow=False,
-            font=dict(size=26, color="#edf2f4"),
-            bgcolor="rgba(11,19,43,0.55)",
+            font=dict(size=26, color="#fdf2e9"),
+            bgcolor="rgba(11, 28, 43, 0.55)",
             borderpad=6,
         )
 
@@ -660,6 +679,22 @@ def figure_to_image(fig: go.Figure, *, img_format: str = "png", width: int, heig
     # Plotly/kaleido supports png, jpeg, webp, svg (we use raster formats)
     # Use scale=1 explicitly to avoid devicePixelRatio variance across renders.
     return fig.to_image(format=img_format, width=width, height=height, scale=1, validate=False)
+
+
+def inject_fonts(html: str) -> str:
+    font_block = (
+        "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
+        "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>"
+        "<link href=\"https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap\" "
+        "rel=\"stylesheet\">"
+        "<style>html, body { margin: 0; padding: 0; }"
+        ".js-plotly-plot, .plotly, .main-svg { font-family: 'Space Grotesk', 'Avenir Next', "
+        "'Segoe UI', 'DejaVu Sans', sans-serif; }"
+        "</style>"
+    )
+    if "<head>" not in html:
+        return html
+    return html.replace("<head>", f"<head>{font_block}", 1)
 
 
 def start_kaleido_sync_server() -> None:
@@ -1034,7 +1069,9 @@ def main() -> None:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_html(str(output_path), include_plotlyjs="cdn")
+    html = fig.to_html(include_plotlyjs="cdn", full_html=True)
+    html = inject_fonts(html)
+    output_path.write_text(html, encoding="utf-8")
     print(f"✨ Journey map written to {output_path.resolve()}")
 
     if args.video:
