@@ -364,6 +364,11 @@
         display: grid;
       }
 
+      .progress-wrap.error .progress-title,
+      .progress-wrap.error .progress-track {
+        display: none;
+      }
+
       .progress-title {
         font-size: 14px;
         font-weight: 600;
@@ -475,11 +480,11 @@
           <div class="steps">
             <div class="step">
               <span>1</span>
-              <p>Add at least two stops with city and country (coordinates are optional).</p>
+              <p>Add at least two stops with city and country.</p>
             </div>
             <div class="step">
               <span>2</span>
-              <p>Optionally add dates and notes, then generate the map or export the flyover.</p>
+              <p>Optionally add coordinates, dates, and notes, then generate the map or export the flyover.</p>
             </div>
           </div>
         </section>
@@ -844,6 +849,7 @@
             ? "Exporting frames and assembling the MP4. This can take a few minutes."
             : "Building your interactive HTML map.";
           progressWrap.classList.add("active");
+          progressWrap.classList.remove("error");
           progressWrap.setAttribute("aria-hidden", "false");
           submitButton.disabled = true;
           submitButton.textContent = exportingVideo ? "Exporting..." : "Generating...";
@@ -873,6 +879,7 @@
             progressText.textContent = "Unable to reach the server. Please try again.";
           }
 
+          progressWrap.classList.add("error");
           submitButton.disabled = false;
           submitButton.textContent = "Generate map";
         });
