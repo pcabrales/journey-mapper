@@ -137,9 +137,14 @@ This repo includes `cloudbuild.yaml`, which builds the Docker image and deploys 
    - Event: “Push to a branch”
    - Branch: `^main$`
    - Configuration: `cloudbuild.yaml`
-2. Ensure the Cloud Build service account can deploy:
+2. Ensure the Cloud Build runtime service account can deploy:
    ```bash
    PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+
+   # Some projects run Cloud Build deploys as the Compute Engine default SA.
+   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+     --role="roles/run.admin"
 
    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
      --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
