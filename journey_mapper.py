@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,9 +19,12 @@ import plotly.graph_objects as go
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-REQUIRED_COLUMNS = {"city", "country", "latitude", "longitude"}
+REQUIRED_COLUMNS = {"city", "country"}
+COORDINATE_COLUMNS = ("latitude", "longitude")
 OPTIONAL_COLUMNS = ["notes", "description"]
 EARTH_RADIUS_KM = 6371.0
+GEOCODE_ENDPOINT = "https://geocoding-api.open-meteo.com/v1/search"
+GEOCODE_TIMEOUT_SECONDS = 10
 
 
 @dataclass
@@ -32,8 +39,9 @@ class GlobeFrame:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create a journey visualization from a CSV file with city, country, latitude, "
-            "and longitude columns. Optionally capture a camera flyover video."
+            "Create a journey visualization from a CSV file with city and country columns. "
+            "Latitude/longitude are optional and will be geocoded when missing. "
+            "Optionally capture a camera flyover video."
         )
     )
     parser.add_argument(
@@ -164,6 +172,102 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _clean_text(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _parse_optional_float(value: Any, *, label: str, row_index: int) -> Optional[float]:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise ValueError(f"Row {row_index + 1} has invalid {label}: {text}") from exc
+
+
+def _geocode_city_country(
+    city: str,
+    country: str,
+    *,
+    cache: Dict[str, Tuple[float, float]],
+    row_index: int,
+) -> Tuple[float, float]:
+    key = f"{city.lower()}|{country.lower()}"
+    if key in cache:
+        return cache[key]
+
+    query = f"{city}, {country}"
+    params = urlencode(
+        {
+            "name": query,
+            "count": 1,
+            "language": "en",
+            "format": "json",
+        }
+    )
+    url = f"{GEOCODE_ENDPOINT}?{params}"
+    request = Request(url, headers={"User-Agent": "journey-mapper/1.0"})
+    try:
+        with urlopen(request, timeout=GEOCODE_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (URLError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Geocoding request failed for '{query}': {exc}") from exc
+
+    results = payload.get("results") or []
+    if not results:
+        raise ValueError(
+            f"Row {row_index + 1} could not be geocoded for '{query}'. "
+            "Provide latitude/longitude or refine the city/country values."
+        )
+
+    first = results[0]
+    lat = first.get("latitude")
+    lon = first.get("longitude")
+    if lat is None or lon is None:
+        raise ValueError(
+            f"Row {row_index + 1} returned an incomplete geocode result for '{query}'."
+        )
+
+    cache[key] = (float(lat), float(lon))
+    return cache[key]
+
+
+def _resolve_coordinates(df: pd.DataFrame) -> pd.DataFrame:
+    cache: Dict[str, Tuple[float, float]] = {}
+    latitudes: List[float] = []
+    longitudes: List[float] = []
+
+    for idx, row in df.iterrows():
+        city = _clean_text(row.get("city"))
+        country = _clean_text(row.get("country"))
+        if not city or not country:
+            raise ValueError(f"Row {idx + 1} must include city and country.")
+
+        lat = _parse_optional_float(row.get("latitude"), label="latitude", row_index=idx)
+        lon = _parse_optional_float(row.get("longitude"), label="longitude", row_index=idx)
+
+        if (lat is None) ^ (lon is None):
+            raise ValueError(
+                f"Row {idx + 1} must include both latitude and longitude or neither."
+            )
+
+        if lat is None or lon is None:
+            lat, lon = _geocode_city_country(city, country, cache=cache, row_index=idx)
+
+        latitudes.append(lat)
+        longitudes.append(lon)
+
+    df = df.copy()
+    df["latitude"] = latitudes
+    df["longitude"] = longitudes
+    return df
+
+
 def load_journey(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     missing = REQUIRED_COLUMNS.difference(df.columns)
@@ -171,10 +275,12 @@ def load_journey(csv_path: Path) -> pd.DataFrame:
         missing_list = ", ".join(sorted(missing))
         raise ValueError(f"Missing required columns: {missing_list}")
 
-    for col in ("latitude", "longitude"):
-        df[col] = pd.to_numeric(df[col], errors="raise")
+    for col in COORDINATE_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
 
     df = df.reset_index(drop=True)
+    df = _resolve_coordinates(df)
     return df
 
 

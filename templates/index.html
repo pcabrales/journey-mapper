@@ -468,14 +468,14 @@
       <main class="grid">
         <section class="card intro reveal delay-1">
           <h1>Plot the trip. Take in the journey.</h1>
-          <p>Enter your cities, drop in coordinates, and watch the route draw itself across the globe.</p>
+          <p>Enter your cities and countries, and watch the route draw itself across the globe.</p>
           <div class="pill-row">
             <div class="pill">Optional MP4</div>
           </div>
           <div class="steps">
             <div class="step">
               <span>1</span>
-              <p>Add at least two stops with city, country, latitude, and longitude in travel order.</p>
+              <p>Add at least two stops with city and country (coordinates are optional).</p>
             </div>
             <div class="step">
               <span>2</span>
@@ -538,8 +538,7 @@
                           step="any"
                           min="-90"
                           max="90"
-                          placeholder="38.7223"
-                          required
+                          placeholder="Auto"
                         />
                       </td>
                       <td class="col-lon">
@@ -550,8 +549,7 @@
                           step="any"
                           min="-180"
                           max="180"
-                          placeholder="-9.1393"
-                          required
+                          placeholder="Auto"
                         />
                       </td>
                       <td class="col-date">
@@ -588,8 +586,7 @@
                           step="any"
                           min="-90"
                           max="90"
-                          placeholder="13.7563"
-                          required
+                          placeholder="Auto"
                         />
                       </td>
                       <td class="col-lon">
@@ -600,8 +597,7 @@
                           step="any"
                           min="-180"
                           max="180"
-                          placeholder="100.5018"
-                          required
+                          placeholder="Auto"
                         />
                       </td>
                       <td class="col-date">
@@ -626,7 +622,7 @@
                 </table>
               </div>
 
-              <div class="hint">Required: city, country, latitude, longitude. Optional: date, notes.</div>
+              <div class="hint">Required: city, country. Optional: latitude, longitude, date, notes. Coordinates auto-fill when blank.</div>
             </div>
 
             <div class="actions">
@@ -659,8 +655,7 @@
                     step="any"
                     min="-90"
                     max="90"
-                    placeholder="Latitude"
-                    required
+                    placeholder="Auto"
                   />
                 </td>
                 <td class="col-lon">
@@ -671,8 +666,7 @@
                     step="any"
                     min="-180"
                     max="180"
-                    placeholder="Longitude"
-                    required
+                    placeholder="Auto"
                   />
                 </td>
                 <td class="col-date">
@@ -707,16 +701,16 @@
         {
           city: "Lisbon",
           country: "Portugal",
-          latitude: "38.7223",
-          longitude: "-9.1393",
+          latitude: "",
+          longitude: "",
           date: "",
           notes: "",
         },
         {
           city: "Bangkok",
           country: "Thailand",
-          latitude: "13.7563",
-          longitude: "100.5018",
+          latitude: "",
+          longitude: "",
           date: "",
           notes: "",
         },

@@ -12,3 +12,6 @@
 - Fixed a Plotly 5.x compatibility issue by removing unsupported marker outlines in the satellite layer and reran the CLI, noting that HTML generation succeeds while video export now correctly prompts for installing `kaleido`.
 - Added a satellite-video fallback so Mapbox tile fetch failures gracefully switch to the styled globe, and documented the behavior.
 - Introduced a `--video-map-style` flag so users can skip satellite rendering during export (preventing the Kaleido warnings in offline environments) and updated the docs accordingly.
+- Added Open-Meteo geocoding to fill missing coordinates from city/country values and adjusted CSV validation accordingly.
+- Updated the web form defaults to treat latitude/longitude as optional and clarified the auto-geocode behavior in the UI.
+- Refreshed README and example CSV to reflect optional coordinates, geocoding requirements, and troubleshooting guidance.

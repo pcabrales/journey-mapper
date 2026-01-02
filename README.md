@@ -4,7 +4,7 @@ Turn a list of stops into a globe-spanning journey. (Made this repo to have a vi
 
 ![](./builds/global_journey.gif)
 
-Feed the app a CSV that names each stop, its country, and its coordinates, and it will paint a connected route with numbered markers on a world map then export an interactive HTML map and an optional camera-tour video.
+Feed the app a CSV that names each stop and its country. Coordinates are optional: when missing, the script looks them up via the Open-Meteo Geocoding API. It then paints a connected route with numbered markers on a world map and exports an interactive HTML map and an optional camera-tour video.
 
 ## Quick start
 
@@ -36,10 +36,16 @@ The CSV must include these columns:
 
 - `city`
 - `country`
+
+Optional columns:
+
 - `latitude`
 - `longitude`
+- `date`
+- `notes`
+- `description`
 
-Optional columns enrich the tooltip (include any combination of `date`, `notes`, or `description`). Rows render in the order they appear, drawing great-circle style lines from one stop to the next.
+If `latitude`/`longitude` are missing or blank, Journey Mapper will geocode the city and country via Open-Meteo. Provide coordinates if you want to avoid a network call or override an ambiguous match. Rows render in the order they appear, drawing great-circle style lines from one stop to the next.
 
 An example dataset lives at `data/example_journey.csv`.
 
@@ -65,7 +71,9 @@ Add `--video builds/global_journey.mp4` to also generate a camera flyover. Open 
 
 ## Troubleshooting
 - For non-Latin characters, save your CSV with UTF-8 encoding.
-- Coordinates must be decimal degrees; the script raises an error if it cannot parse them.
+- If geocoding fails, verify your city/country names or provide explicit latitude/longitude.
+- Geocoding needs access to `geocoding-api.open-meteo.com`; offline runs require coordinates in the CSV.
+- Coordinates must be decimal degrees if provided; the script raises an error if it cannot parse them.
 
 ## Deployment (Cloud Run)
 
@@ -107,7 +115,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --region "$REGION" \
   --platform managed \
   --allow-unauthenticated \
-  --memory 1Gi \
+  --memory 4Gi \
   --cpu 1 \
   --concurrency 1 \
   --timeout 900 \

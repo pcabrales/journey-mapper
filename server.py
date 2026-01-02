@@ -19,20 +19,30 @@ DEFAULT_ROWS = [
     {
         "city": "Lisbon",
         "country": "Portugal",
-        "latitude": 38.7223,
-        "longitude": -9.1393,
+        "latitude": "",
+        "longitude": "",
         "date": "",
         "notes": "",
     },
     {
         "city": "Bangkok",
         "country": "Thailand",
-        "latitude": 13.7563,
-        "longitude": 100.5018,
+        "latitude": "",
+        "longitude": "",
         "date": "",
         "notes": "",
     },
 ]
+
+
+def _parse_optional_float(value: str, *, label: str, row_index: int):
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        abort(400, f"Row {row_index + 1} has invalid {label}.")
 
 
 def build_rows_from_form(form):
@@ -69,21 +79,21 @@ def build_rows_from_form(form):
         if not any([city, country, latitude, longitude, date, note]):
             continue
 
-        if not all([city, country, latitude, longitude]):
+        if not all([city, country]):
             abort(400, f"Row {idx + 1} is missing a required field.")
 
-        try:
-            latitude_value = float(latitude)
-            longitude_value = float(longitude)
-        except ValueError:
-            abort(400, f"Row {idx + 1} has invalid latitude/longitude.")
+        latitude_value = _parse_optional_float(latitude, label="latitude", row_index=idx)
+        longitude_value = _parse_optional_float(longitude, label="longitude", row_index=idx)
+
+        if (latitude_value is None) ^ (longitude_value is None):
+            abort(400, f"Row {idx + 1} must include both latitude and longitude or neither.")
 
         rows.append(
             {
                 "city": city,
                 "country": country,
-                "latitude": latitude_value,
-                "longitude": longitude_value,
+                "latitude": "" if latitude_value is None else latitude_value,
+                "longitude": "" if longitude_value is None else longitude_value,
                 "date": date,
                 "notes": note,
             }
